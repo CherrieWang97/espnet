@@ -23,7 +23,7 @@ xml_de=$src/IWSLT.TED.$set.en-de.de.xml
 if [ $set = tst2018 ]; then
     yml=$src/IWSLT.TED.$set.en-de.yaml
 else
-    yml=$src/test-db.yaml
+    yml=data/local/downloads/test-db-$set.yaml
 fi
 
 mkdir -p $dst || exit 1;

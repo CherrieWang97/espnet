@@ -35,8 +35,8 @@ elif [ $set = "tst2018" ];then
 fi
 
 if [ ! -d "$data" ]; then
-    echo "$0: no such directory $data"
-    exit 1;
+    mkdir -p $data
+    echo "No such directory: ${data} Make it!"
 fi
 
 sets="train dev2010 tst2010 tst2013 tst2014 tst2015 tst2018"
