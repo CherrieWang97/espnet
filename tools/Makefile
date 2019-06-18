@@ -118,8 +118,7 @@ nkf.done:
 
 sentencepiece.done:
 	rm -rf sentencepiece
-	git clone https://github.com/google/sentencepiece.git
-	cd sentencepiece && mkdir build && cd build && (cmake3 .. || cmake ..) && $(MAKE)
+	. venv/bin/activate; pip install sentencepiece
 	touch sentencepiece.done
 
 mecab.done: espnet.done
