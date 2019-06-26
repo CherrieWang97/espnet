@@ -255,6 +255,11 @@ def train(args):
     # specify model architecture
     model_class = dynamic_import(args.model_module)
     model = model_class(idim, odim, args)
+    if args.asr_model:
+        torch_load(args.asr_model, model.enc)
+    if args.mt_model:
+        torch_load(args.mt_model, model.dec)
+
     assert isinstance(model, ASRInterface)
     subsampling_factor = model.subsample[0]
 

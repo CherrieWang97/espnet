@@ -208,8 +208,8 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
 fi
 
-dict=data/lang_1char/${train_set}_units_${case}.txt
-nlsyms=data/lang_1char/non_lang_syms_${case}.txt
+dict=/hdfs/resrchvc/v-chengw/iwslt18/data4st/data/lang_1char/${train_set}_units_${case}.txt
+nlsyms=/hdfs/resrchvc/v-chengw/iwslt18/data4st/data/lang_1char/non_lang_syms_${case}.txt
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
@@ -282,7 +282,9 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --verbose ${verbose} \
         --resume ${resume} \
         --train-json ${feat_tr_dir}/data.${case}.json \
-        --valid-json ${feat_dt_dir}/data.${case}.json
+        --valid-json ${feat_dt_dir}/data.${case}.json \
+        --asr_model ${asr_model} \
+        --mt_model ${mt_model} \
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then

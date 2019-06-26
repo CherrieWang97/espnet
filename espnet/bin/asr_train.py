@@ -61,6 +61,10 @@ def get_parser():
     # network architecture
     parser.add_argument('--model-module', type=str, default=None,
                         help='model defined module (default: espnet.nets.xxx_backend.e2e_asr:E2E)')
+    parser.add_argument('--asr_model', type=str, default=None, 
+                        help="asr model for transfer learning")
+    parser.add_argument('--mt_model', type=str, default=None,
+                        help='mt model for transfer leanring')
     # encoder
     parser.add_argument('--num-spkrs', default=1, type=int,
                         choices=[1, 2],
