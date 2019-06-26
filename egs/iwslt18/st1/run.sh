@@ -12,7 +12,6 @@ stage=-1        # start from -1 if you need to start from data download
 stop_stage=100
 ngpu=1          # number of gpus ("0" uses cpu, otherwise use gpu)
 debugmode=1
-dumpdir=dump    # directory to dump full features
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
 resume=         # Resume the training from snapshot
@@ -39,7 +38,8 @@ case=lc
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-st_ted=/export/b08/inaguma/IWSLT
+st_ted=/hdfs/resrchvc/v-chengw/iwslt18/data
+dumpdir=/hdfs/resrchvc/v-chengw/iwslt18/data4st/dump    # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -253,27 +253,21 @@ fi
 
 # NOTE: skip stage 3: LM Preparation
 
-if [ -z ${tag} ]; then
-    expname=${train_set}_${case}_${backend}_$(basename ${train_config%.*})
-    if ${do_delta}; then
-        expname=${expname}_delta
-    fi
-    if [ -n "${asr_model}" ]; then
-        expname=${expname}_asrtrans
-    fi
-    if [ -n "${mt_model}" ]; then
-        expname=${expname}_mttrans
-    fi
-else
-    expname=${train_set}_${case}_${backend}_${tag}
+expname=st_${tag}
+if [ -n "${asr_model}" ]; then
+    expname=${expname}_asrtrans
 fi
-expdir=exp/${expname}
-mkdir -p ${expdir}
+if [ -n "${mt_model}" ]; then
+    expname=${expname}_mttrans
+fi
 
+expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4st/${expname}
+mkdir -p ${expdir}
+mkdir -p exp
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "stage 4: Network Training"
 
-    ${cuda_cmd} --gpu ${ngpu} ${expdir}/train.log \
+    ${cuda_cmd} --gpu ${ngpu} exp/train.log \
         asr_train.py \
         --config ${train_config} \
         --ngpu ${ngpu} \
@@ -298,16 +292,18 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     pids=() # initialize pids
     for rtask in ${recog_set}; do
     (
-        decode_dir=decode_${rtask}_$(basename ${decode_config%.*})
+        decode_dir=decode_${rtask}
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
         # split data
-        splitjson.py --parts ${nj} ${feat_recog_dir}/data.${case}.json
+        #splitjson.py --parts ${nj} ${feat_recog_dir}/data.${case}.json
 
         #### use CPU for decoding
         ngpu=0
+        mkdir -p exp/${decode_dir}
+        mkdir -p ${expdir}/${decode_dir}
 
-        ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
+        ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
             asr_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
