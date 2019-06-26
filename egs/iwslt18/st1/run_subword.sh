@@ -26,8 +26,8 @@ decode_config=conf/decode.yaml
 recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.best' or 'model.loss.best'
 
 # pre-training related
-asr_model=
-mt_model=
+asr_model=""
+mt_model=""
 
 # preprocessing related
 nbpe=500
@@ -55,7 +55,7 @@ set -o pipefail
 
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
-train_dev=train_dev.de
+train_dev=dev.de
 recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
@@ -205,7 +205,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
 fi
 
-dict=/hdfs/resrchvc/v-chengw/iwslt18/data4st/data/lang_1char/train_${bpemode}${nbpe}.txt
+dict=/hdfs/resrchvc/v-chengw/iwslt18/data4st/data/lang_1char/train_${bpemode}${nbpe}_units.txt
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
@@ -274,9 +274,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --verbose ${verbose} \
         --resume ${resume} \
         --train-json ${feat_tr_dir}/data_${bpemode}${nbpe}.json \
-        --valid-json ${feat_dt_dir}/data_${bpemode}${nbpe}.json \
-        --asr_model ${asr_model} \
-        --mt_model ${mt_model} \
+        --valid-json ${feat_dt_dir}/data_${bpemode}${nbpe}.json 
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
