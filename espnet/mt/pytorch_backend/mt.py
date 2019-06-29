@@ -3,8 +3,6 @@
 
 # Copyright 2019 Kyoto University (Hirofumi Inaguma)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
-
-import pdb
 import json
 import logging
 import os
@@ -64,7 +62,7 @@ class CustomConverter(object):
 
     def __init__(self, idim):
         self.ignore_id = -1
-        self.pad = idim
+        self.pad = idim - 1
 
     def __call__(self, batch, device):
         """Transforms a batch and send it to a device
@@ -173,7 +171,7 @@ def train(args):
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     train = make_mtbatchset(args.train_src, args.train_trg, args)
-    #valid = make_mtbatchset(args.valid_src, args.valid_trg, args)
+    valid = make_mtbatchset(args.valid_src, args.valid_trg, args)
 
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
@@ -190,10 +188,9 @@ def train(args):
         train_iter = ToggleableShufflingSerialIterator(
             TransformDataset(train, converter.transform),
             batch_size=1, shuffle=not use_sortagrad)
-    #    valid_iter = ToggleableShufflingSerialIterator(
-    #        TransformDataset(valid, converter.transform),
-    #        batch_size=1, repeat=False, shuffle=False)
-
+        valid_iter = ToggleableShufflingSerialIterator(
+            TransformDataset(valid, converter.transform),
+            batch_size=1, repeat=False, shuffle=False)
     # Set up a trainer
     updater = CustomUpdater(
         model, args.grad_clip, train_iter, optimizer, converter, device, args.ngpu, args.accum_grad)
@@ -210,8 +207,8 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    #trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
-    """
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
+    
 
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
@@ -251,7 +248,7 @@ def train(args):
                            trigger=CompareValueTrigger(
                                'validation/main/loss',
                                lambda best_value, current_value: best_value < current_value))
-    """
+    
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/loss', 'validation/main/loss',
@@ -263,15 +260,14 @@ def train(args):
             'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
             trigger=(REPORT_INTERVAL, 'iteration'))
         report_keys.append('eps')
-    #trainer.extend(extensions.PrintReport(
-    #    report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
+    trainer.extend(extensions.PrintReport(
+        report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
     trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
-    #set_early_stop(trainer, args)
-    pdb.set_trace()
+    set_early_stop(trainer, args)
     # Run the training
     trainer.run()
-    #check_early_stop(trainer, args.epochs)
+    check_early_stop(trainer, args.epochs)
 
 
 def trans(args):

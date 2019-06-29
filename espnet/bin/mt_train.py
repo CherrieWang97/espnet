@@ -45,6 +45,7 @@ def get_parser():
     parser.add_argument('--dict-src', default='', nargs='?',
                         help='Dictionary for source language. \
                         Dictionanies are shared between soruce and target languages in default setting.')
+    parser.add_argument('--share-dict', default=False, nargs='?')
     parser.add_argument('--seed', default=1, type=int,
                         help='Random seed')
     parser.add_argument('--debugdir', type=str,
@@ -247,43 +248,44 @@ def main(cmd_args):
     np.random.seed(args.seed)
 
     # load dictionary for debug log
-    if args.dict_src is not None:
-        src_dict = {}
-        with open(args.dict_src, 'rb') as f:
-            dictionary = f.readlines()
-        for entry in dictionary:
-            entry = entry.decode('utf-8').strip().split(' ')
-            word = entry[0]
-            id = int(entry[1])
-            src_dict[word] = id
-        src_dict['<blank>'] = 0
-        src_dict['<eos>'] = len(src_dict.items()) 
-        args.src_dict = src_dict
-    else:
-        args.src_dict = None
-
     if args.dict_tgt is not None:
         tgt_dict = {}
-        rev_tgt_dict = {}
+        char_list = []
         with open(args.dict_tgt, 'rb') as f:
             dictionary = f.readlines()
         for entry in dictionary:
-            entry = entry.decode('utf-8').strip().split(' ')
+            entry = entry.decode('utf-8').split(' ')
             word = entry[0]
             id = int(entry[1])
             tgt_dict[word] = id
-            rev_tgt_dict[str(id)] = word
+            char_list.append(word)
         tgt_dict['<blank>'] = 0
-        rev_tgt_dict['0'] = '<blank>'
-        tgt_dict['<eos>'] = len(tgt_dict.items()) 
-        rev_tgt_dict[str(tgt_dict["<eos>"])] = '<eos>'
+        char_list.insert(0, "<blank>")
+        tgt_dict['<eos>'] = len(tgt_dict.items())
+        char_list.append("<eos>")
         args.tgt_dict = tgt_dict
-        args.rev_tgt_dict = rev_tgt_dict
-        args.char_list = list(tgt_dict.keys())
+        args.char_list = char_list
     else:
         args.tgt_dict = None
-        args.rev_tgt_dict = None
         args.char_list = None
+
+    if args.share_dict:
+        args.dict_src = args.dict_tgt
+    else:
+        if args.dict_src is not None:
+            src_dict = {}
+            with open(args.dict_src, 'rb') as f:
+                dictionary = f.readlines()
+            for entry in dictionary:
+                entry = entry.decode('utf-8').split(' ')
+                word = entry[0]
+                id = int(entry[1])
+                src_dict[word] = id
+            src_dict['<blank>'] = 0
+            src_dict['<eos>'] = len(src_dict.items())
+            args.src_dict = src_dict
+        else:
+            args.src_dict = None
 
     # train
     logging.info('backend = ' + args.backend)

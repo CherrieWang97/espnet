@@ -65,73 +65,28 @@ train_dev=train_dev
 recog_set="dev test"
 
 
-dict_src=data/lang_1char/${train_set}_${bpemode}${nbpe}_units_en.txt
-dict_trg=data/lang_1char/${train_set}_${bpemode}${nbpe}_units.txt
+dict_src=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_en.txt
+dict_trg=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_de.txt
 bpemodel=data/lang_1char/${train_set}_${bpemode}${nbpe}_en
 bpemodel_trg=data/lang_1char/${train_set}_${bpemode}${nbpe}
 
-echo "dictionary (src): ${dict_src}"
-if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
-    ### Task dependent. You have to check non-linguistic symbols used in the corpus.
-    echo "stage 2: Dictionary and Json Data Preparation"
-    mkdir -p data/lang_1char/
-
-    echo "<unk> 1" > ${dict_src} # <unk> must be 1, 0 will be used for "blank" in CTC
-    spm_train --input=${datadir}/${train_set}/text.lc.en --vocab_size=${nbpe} --model_type=${bpemode} \
-        --model_prefix=${bpemodel} --input_sentence_size=10000000
-    spm_encode --model=${bpemodel}.model --output_format=piece < ${datadir}/${train_set}/text.lc.en | \
-        tr ' ' '\n' | sort | uniq | awk '{print $0 " " NR+1}' >> ${dict_src}
-    wc -l ${dict_src}
-fi
-
-
-
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
-    echo "make json files"
-    local/data2json.sh --nj 16 --text ${datadir}/${train_set}/text.lc.en --bpecode ${bpemodel}.model \
-        ${datadir}/${train_set} ${dict_src} > ${datadir}/${train_set}/data.en.${nbpe}.json
-    #local/data2json.sh --text data/${train_dev}/text.${tgt_case} --nlsyms ${nlsyms} \
-    #    data/${train_dev} ${dict_tgt} > ${feat_dt_dir}/data.${src_case}_${tgt_case}.json
-    #for rtask in ${recog_set}; do
-    #    feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}; mkdir -p ${feat_recog_dir}
-    #    local/data2json.sh --text data/${rtask}/text.${tgt_case} --nlsyms ${nlsyms} \
-    #        data/${rtask} ${dict_tgt} > ${feat_recog_dir}/data.${src_case}_${tgt_case}.json
-    #done
-
-    # update json (add source references)
-    local/update_json.sh --text data/"$(echo ${train_set} | cut -f -1 -d ".")".en/text.${src_case} --nlsyms ${nlsyms} \
-        ${feat_tr_dir}/data.${src_case}_${tgt_case}.json data/"$(echo ${train_set} | cut -f -1 -d ".")".en ${dict_src}
-    local/update_json.sh --text data/"$(echo ${train_set} | cut -f -1 -d ".")".en/text.${src_case} --nlsyms ${nlsyms} \
-        ${feat_tr_dir}/data_gtranslate.${src_case}_${tgt_case}.json data/"$(echo ${train_set} | cut -f -1 -d ".")".en ${dict_src}
-    local/update_json.sh --text data/"$(echo ${train_dev} | cut -f -1 -d ".")".en/text.${src_case} --nlsyms ${nlsyms} \
-        ${feat_dt_dir}/data.${src_case}_${tgt_case}.json data/"$(echo ${train_dev} | cut -f -1 -d ".")".en ${dict_src}
- 
-    for rtask in ${recog_set}; do
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
-        local/update_json.sh --text data/"$(echo ${rtask} | cut -f -1 -d ".")".en/text.${src_case} --nlsyms ${nlsyms} \
-            ${feat_recog_dir}/data.${src_case}_${tgt_case}.json data/"$(echo ${rtask} | cut -f -1 -d ".")".en ${dict_src}
-    done
-
-    # concatenate Fr and Fr (Google translation) jsons
-    local/concat_json_multiref.py \
-        ${feat_tr_dir}/data.${src_case}_${tgt_case}.json \
-        ${feat_tr_dir}/data_gtranslate.${src_case}_${tgt_case}.json > ${feat_tr_dir}/data_2ref.${src_case}_${tgt_case}.json
-fi
 
 # NOTE: skip stage 3: LM Preparation
 
 if [ -z ${tag} ]; then
     expname=${train_set}_${src_case}_${tgt_case}_${backend}_$(basename ${train_config%.*})
 else
-    expname=${train_set}_${backend}_${tag}
+    expname=mt_ted
 fi
-expdir=exp/${expname}
+expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/${expname}
 mkdir -p ${expdir}
 
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "stage 4: Network Training"
+    mkdir -p ${expdir}
+    mkdir -p exp/${expname}
 
-    ${cuda_cmd} --gpu ${ngpu} ${expdir}/train.log \
+    ${cuda_cmd} --gpu ${ngpu} exp/train.log \
         mt_train.py \
         --config ${train_config} \
         --ngpu ${ngpu} \
@@ -146,8 +101,10 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json /hdfs/resrchvc/v-chengw/iwslt18/data4st/dump/train_nodevtest_sp.de/deltafalse/data.lc.json \
-        --valid-json /hdfs/resrchvc/v-chengw/iwslt18/data4st/dump/dev.de/deltafalse/data.lc.json
+        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.en.tok \
+        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.de.tok \
+        --valid-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.tok \
+        --valid-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.de.tok
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then

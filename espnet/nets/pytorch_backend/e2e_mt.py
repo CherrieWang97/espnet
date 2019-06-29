@@ -3,6 +3,7 @@
 
 
 from __future__ import division
+import pdb
 import logging
 import math
 import os
@@ -73,7 +74,7 @@ class E2E(MTInterface, torch.nn.Module):
         self.replace_sos = args.replace_sos
 
         # encoder
-        self.embed_src = torch.nn.Embedding(idim + 1, args.eunits, padding_idx=idim)
+        self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=idim-1)
         # NOTE: +1 means the padding index
         self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
         self.enc = encoder_for(args, args.eunits, self.subsample)
@@ -149,6 +150,7 @@ class E2E(MTInterface, torch.nn.Module):
 
         # 3. attention loss
         loss, acc, ppl = self.dec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+        pdb.set_trace()
         self.acc = acc
         self.ppl = ppl
 
