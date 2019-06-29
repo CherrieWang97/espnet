@@ -56,7 +56,7 @@ class E2E(ASRInterface, torch.nn.Module):
     :param Namespace args: argument Namespace containing options
     """
 
-    def __init__(self, idim, odim, args):
+    def __init__(self, idim, odim, args, asr_model=None, mt_model=None):
         torch.nn.Module.__init__(self)
         self.mtlalpha = args.mtlalpha
         assert 0.0 <= self.mtlalpha <= 1.0, "mtlalpha should be [0.0, 1.0]"
@@ -117,6 +117,23 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # weight initialization
         self.init_like_chainer()
+
+        if asr_model is not None:
+            param_dict = dict(asr_model.named_parameters())
+            for n, p in self.named_parameters():
+                # overwrite the encoder
+                if n in param_dict.keys() and p.size() == param_dict[n].size():
+                    if 'enc.enc' in n:
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s' % n)
+        if mt_model is not None:
+            param_dict = dict(mt_model.named_parameters())
+            for n, p in self.named_parameters():
+                # overwrite the decoder
+                if n in param_dict.keys() and p.size() == param_dict[n].size():
+                    if 'dec.' in n or 'att' in n:
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s' % n)
 
         # options for beam search
         if 'report_cer' in vars(args) and (args.report_cer or args.report_wer):
