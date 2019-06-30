@@ -434,8 +434,8 @@ def make_mtbatchset(src_data_path, trg_data_path, args):
                     break
                 src_line = src_line.strip().split()
                 trg_line = trg_line.strip().split()
-                example = (np.asarray(list(map(int, src_line), dtype=np.int32),
-                         np.asarray(list(map(int, trg_line), dtype=np.int32))
+                example = (np.asarray(list(map(int, src_line)), dtype=np.int32),
+                         np.asarray(list(map(int, trg_line)), dtype=np.int32))
                 examples.append(example)
     examples.sort(key=lambda x: -len(x[0]))
     batch_per_group = 8

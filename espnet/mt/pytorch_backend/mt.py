@@ -4,7 +4,6 @@
 # Copyright 2019 Kyoto University (Hirofumi Inaguma)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 import json
-import pdb
 import logging
 import os
 import sys
@@ -64,6 +63,7 @@ class CustomConverter(object):
 
     def __init__(self, idim):
         self.pad = 2
+        self.ignore_id = -1
 
     def __call__(self, batch, device):
         """Transforms a batch and send it to a device
@@ -112,8 +112,8 @@ def train(args):
         logging.warning('cuda is not available')
 
     # get input and output dimension info
-    idim = len(args.src_dict.items())
-    odim = len(args.tgt_dict.items())
+    idim = args.src_vocab
+    odim = args.tgt_vocab
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
     
@@ -309,7 +309,6 @@ def trans(args):
         with torch.no_grad():
             for idx, sent in enumerate(sentences):
                 nbest_hyps = model.translate([sent], args, train_args.char_list)
-                pdb.set_trace()
                 one_best.append(nbest_hyps[0])
                 logging.info("translated: " + nbest_hyps[0])
     else:

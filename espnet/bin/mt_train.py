@@ -42,6 +42,8 @@ def get_parser():
                         help='Debugmode')
     parser.add_argument('--dict-tgt', required=True,
                         help='Dictionary for target language')
+    parser.add_argument('--src-vocab', default=5000, type=int)
+    parser.add_argument('--tgt-vocab', default=5000, type=int)
     parser.add_argument('--dict-src', default='', nargs='?',
                         help='Dictionary for source language. \
                         Dictionanies are shared between soruce and target languages in default setting.')
@@ -248,6 +250,7 @@ def main(cmd_args):
     np.random.seed(args.seed)
 
     # load dictionary for debug log
+    tgt_dict = {}
     if args.dict_tgt is not None:
         char_list = []
         lineno = 0
