@@ -15,7 +15,7 @@ debugmode=1
 dumpdir=dump    # directory to dump full features
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
-resume=         # Resume the training from snapshot
+resume=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.1         # Resume the training from snapshot
 seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
@@ -73,11 +73,7 @@ bpemodel_trg=data/lang_1char/${train_set}_${bpemode}${nbpe}
 
 # NOTE: skip stage 3: LM Preparation
 
-if [ -z ${tag} ]; then
-    expname=${train_set}_${src_case}_${tgt_case}_${backend}_$(basename ${train_config%.*})
-else
-    expname=mt_ted
-fi
+expname=mt_ted
 expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/${expname}
 mkdir -p ${expdir}
 

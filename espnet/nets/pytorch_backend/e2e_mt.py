@@ -3,7 +3,6 @@
 
 
 from __future__ import division
-import pdb
 import logging
 import math
 import os
@@ -52,9 +51,9 @@ class E2E(MTInterface, torch.nn.Module):
 
         # below means the last number becomes eos/sos ID
         # note that sos/eos IDs are identical
-        self.sos = odim - 1
-        self.eos = odim - 1
-        self.pad = odim
+        self.sos = 1
+        self.eos = 2
+        self.pad = self.eos
 
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
@@ -150,7 +149,6 @@ class E2E(MTInterface, torch.nn.Module):
 
         # 3. attention loss
         loss, acc, ppl = self.dec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-        pdb.set_trace()
         self.acc = acc
         self.ppl = ppl
 

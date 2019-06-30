@@ -44,7 +44,7 @@ def get_parser():
     parser.add_argument('--preprocess-conf', type=str, default=None,
                         help='The configuration file for the pre-processing')
     # task related
-    parser.add_argument('--recog-json', type=str,
+    parser.add_argument('--recog-path', type=str,
                         help='Filename of recognition data (json)')
     parser.add_argument('--result-label', type=str, required=True,
                         help='Filename of result label data (json)')

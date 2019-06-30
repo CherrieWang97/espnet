@@ -249,43 +249,22 @@ def main(cmd_args):
 
     # load dictionary for debug log
     if args.dict_tgt is not None:
-        tgt_dict = {}
         char_list = []
+        lineno = 0
         with open(args.dict_tgt, 'rb') as f:
             dictionary = f.readlines()
         for entry in dictionary:
             entry = entry.decode('utf-8').split(' ')
             word = entry[0]
-            id = int(entry[1])
-            tgt_dict[word] = id
+            tgt_dict[word] = lineno
             char_list.append(word)
-        tgt_dict['<blank>'] = 0
-        char_list.insert(0, "<blank>")
-        tgt_dict['<eos>'] = len(tgt_dict.items())
-        char_list.append("<eos>")
+            lineno += 1
         args.tgt_dict = tgt_dict
         args.char_list = char_list
     else:
         args.tgt_dict = None
         args.char_list = None
 
-    if args.share_dict:
-        args.dict_src = args.dict_tgt
-    else:
-        if args.dict_src is not None:
-            src_dict = {}
-            with open(args.dict_src, 'rb') as f:
-                dictionary = f.readlines()
-            for entry in dictionary:
-                entry = entry.decode('utf-8').split(' ')
-                word = entry[0]
-                id = int(entry[1])
-                src_dict[word] = id
-            src_dict['<blank>'] = 0
-            src_dict['<eos>'] = len(src_dict.items())
-            args.src_dict = src_dict
-        else:
-            args.src_dict = None
 
     # train
     logging.info('backend = ' + args.backend)

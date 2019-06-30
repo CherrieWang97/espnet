@@ -4,6 +4,7 @@
 # Copyright 2019 Kyoto University (Hirofumi Inaguma)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 import json
+import pdb
 import logging
 import os
 import sys
@@ -31,6 +32,7 @@ from espnet.utils.deterministic_utils import set_deterministic_pytorch
 from espnet.utils.dynamic_import import dynamic_import
 from espnet.utils.io_utils import LoadInputsAndTargets
 from espnet.utils.training.batchfy import make_mtbatchset
+from espnet.utils.training.batchfy import sequence_to_id
 from espnet.utils.training.iterators import ShufflingEnabler
 from espnet.utils.training.iterators import ToggleableShufflingMultiprocessIterator
 from espnet.utils.training.iterators import ToggleableShufflingSerialIterator
@@ -61,8 +63,7 @@ class CustomConverter(object):
     """
 
     def __init__(self, idim):
-        self.ignore_id = -1
-        self.pad = idim - 1
+        self.pad = 2
 
     def __call__(self, batch, device):
         """Transforms a batch and send it to a device
@@ -269,6 +270,12 @@ def train(args):
     trainer.run()
     check_early_stop(trainer, args.epochs)
 
+def id_to_sentence(char_list, sent):
+    ret = []
+    for i in sent:
+        ret.append(char_list[i])
+    return ' '.join(ret)
+
 
 def trans(args):
     """Decode with the given args
@@ -288,43 +295,29 @@ def trans(args):
 
 
     # read json data
-    with open(args.recog_json, 'rb') as f:
-        js = json.load(f)['utts']
-    new_js = {}
+    sentences = []
+    word_dict = dict(train_args.src_dict)
+    with open(args.recog_path, 'rb') as f:
+        for line in f:
+            line = line.decode().strip().split()
+            sent = np.asarray(sequence_to_id(word_dict, line), dtype=np.int32)
+            sentences.append(sent)
 
-    # remove enmpy utterances
-    if train_args.replace_sos:
-        js = {k: v for k, v in js.items() if v['output'][0]['shape'][0] > 1 and v['output'][1]['shape'][0] > 1}
-    else:
-        js = {k: v for k, v in js.items() if v['output'][0]['shape'][0] > 0 and v['output'][1]['shape'][0] > 0}
-
+    # read json data
+    one_best = []
     if args.batchsize == 0:
         with torch.no_grad():
-            for idx, name in enumerate(js.keys(), 1):
-                logging.info('(%d/%d) decoding ' + name, idx, len(js.keys()))
-                feat = [js[name]['output'][1]['tokenid'].split()]
-                nbest_hyps = model.translate(feat, args, train_args.char_list, rnnlm)
-                new_js[name] = add_results_to_json(js[name], nbest_hyps, train_args.char_list)
+            for idx, sent in enumerate(sentences):
+                nbest_hyps = model.translate([sent], args, train_args.char_list)
+                pdb.set_trace()
+                one_best.append(nbest_hyps[0])
+                logging.info("translated: " + nbest_hyps[0])
     else:
         def grouper(n, iterable, fillvalue=None):
             kargs = [iter(iterable)] * n
             return zip_longest(*kargs, fillvalue=fillvalue)
 
-        # sort data
-        keys = list(js.keys())
-        feat_lens = [js[key]['output'][1]['shape'][0] for key in keys]
-        sorted_index = sorted(range(len(feat_lens)), key=lambda i: -feat_lens[i])
-        keys = [keys[i] for i in sorted_index]
 
-        with torch.no_grad():
-            for names in grouper(args.batchsize, keys, None):
-                names = [name for name in names if name]
-                feats = [np.fromiter(map(int, js[name]['output'][1]['tokenid'].split()), dtype=np.int64)
-                         for name in names]
-                nbest_hyps = model.translate_batch(feats, args, train_args.char_list, rnnlm=rnnlm)
-                for i, nbest_hyp in enumerate(nbest_hyps):
-                    name = names[i]
-                    new_js[name] = add_results_to_json(js[name], nbest_hyp, train_args.char_list)
-
-    with open(args.result_label, 'wb') as f:
-        f.write(json.dumps({'utts': new_js}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
+    with open(args.result_label, 'w', encoding="utf-8") as f:
+        for r in one_best:
+            f.write(r+"\n")

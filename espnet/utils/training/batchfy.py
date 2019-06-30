@@ -425,17 +425,17 @@ def make_mtbatchset(src_data_path, trg_data_path, args):
     logging.info("Read data from %s and %s" % (src_data_path, trg_data_path))
 
     examples = []
-    with open(src_data_path, "rb") as sf:
-        with open(trg_data_path, "rb") as tf:
+    with open(src_data_path, "r", encoding='utf-8') as sf:
+        with open(trg_data_path, "r", encoding='utf-8') as tf:
             while True:
                 src_line = sf.readline()
                 trg_line = tf.readline()
                 if not src_line or not trg_line:
                     break
-                src_line = src_line.decode().strip().split()
-                trg_line = trg_line.decode().strip().split()
-                example = (np.asarray(sequence_to_id(args.src_dict, src_line), dtype=np.int32),
-                         np.asarray(sequence_to_id(args.tgt_dict, trg_line), dtype=np.int32))
+                src_line = src_line.strip().split()
+                trg_line = trg_line.strip().split()
+                example = (np.asarray(list(map(int, src_line), dtype=np.int32),
+                         np.asarray(list(map(int, trg_line), dtype=np.int32))
                 examples.append(example)
     examples.sort(key=lambda x: -len(x[0]))
     batch_per_group = 8
