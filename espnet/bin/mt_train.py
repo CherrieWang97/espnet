@@ -257,7 +257,7 @@ def main(cmd_args):
         with open(args.dict_tgt, 'rb') as f:
             dictionary = f.readlines()
         for entry in dictionary:
-            entry = entry.decode('utf-8').split(' ')
+            entry = entry.decode('utf-8').split('\t')
             word = entry[0]
             tgt_dict[word] = lineno
             char_list.append(word)

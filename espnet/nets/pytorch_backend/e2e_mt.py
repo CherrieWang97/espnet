@@ -46,7 +46,7 @@ class E2E(MTInterface, torch.nn.Module):
         torch.nn.Module.__init__(self)
         self.etype = args.etype
         self.verbose = args.verbose
-        self.char_list = list(args.tgt_dict.keys())
+        self.char_list = args.char_list
         self.outdir = args.outdir
         self.reporter = Reporter()
 
