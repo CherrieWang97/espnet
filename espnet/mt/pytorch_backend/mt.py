@@ -194,7 +194,7 @@ def train(args):
             batch_size=1, repeat=False, shuffle=False)
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer, converter, device, args.ngpu, args.accum_grad)
+        model, args.grad_clip, train_iter, optimizer, converter, device, args.ngpu)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -205,7 +205,7 @@ def train(args):
     # Resume from a snapshot
     if args.resume:
         logging.info('resumed from %s' % args.resume)
-        torch_resume(args.resume, trainer)
+        torch_load(args.resume, model)
 
     # Evaluate the model with the test dataset for each epoch
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
@@ -296,21 +296,23 @@ def trans(args):
 
     # read json data
     sentences = []
-    word_dict = dict(train_args.src_dict)
     with open(args.recog_path, 'rb') as f:
         for line in f:
             line = line.decode().strip().split()
-            sent = np.asarray(sequence_to_id(word_dict, line), dtype=np.int32)
+            sent = np.asarray(list(map(int, line)), dtype=np.int32)
             sentences.append(sent)
-
     # read json data
     one_best = []
     if args.batchsize == 0:
         with torch.no_grad():
             for idx, sent in enumerate(sentences):
                 nbest_hyps = model.translate([sent], args, train_args.char_list)
-                one_best.append(nbest_hyps[0])
-                logging.info("translated: " + nbest_hyps[0])
+                best = nbest_hyps[0]['yseq']
+                if best[0] == 1:
+                    best = best[1:]
+                if best[-1] == 2:
+                    best = best[:-1]
+                #one_best.append(id_to_sentence(train_args.char_list, best))
     else:
         def grouper(n, iterable, fillvalue=None):
             kargs = [iter(iterable)] * n

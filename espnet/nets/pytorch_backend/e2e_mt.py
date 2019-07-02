@@ -74,7 +74,7 @@ class E2E(MTInterface, torch.nn.Module):
         self.replace_sos = args.replace_sos
 
         # encoder
-        self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=idim-1)
+        self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2)
         # NOTE: +1 means the padding index
         self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
         self.enc = encoder_for(args, args.eunits, self.subsample)

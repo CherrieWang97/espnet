@@ -15,7 +15,7 @@ debugmode=1
 dumpdir=dump    # directory to dump full features
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
-resume=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.1         # Resume the training from snapshot
+resume=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.4         # Resume the training from snapshot
 seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
@@ -62,11 +62,11 @@ set -o pipefail
 train_set=train_nodev
 train_set_prefix=train_nodev
 train_dev=train_dev
-recog_set="dev test"
+recog_set="dev"
 
 
-dict_src=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_en.txt
-dict_trg=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_de.txt
+dict_src=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_en.vocab
+dict_trg=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_de.vocab
 bpemodel=data/lang_1char/${train_set}_${bpemode}${nbpe}_en
 bpemodel_trg=data/lang_1char/${train_set}_${bpemode}${nbpe}
 
@@ -82,7 +82,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     mkdir -p ${expdir}
     mkdir -p exp/${expname}
 
-    ${cuda_cmd} --gpu ${ngpu} exp/train.log \
+    ${cuda_cmd} --gpu ${ngpu} exp/${expname}/train.log \
         mt_train.py \
         --config ${train_config} \
         --ngpu ${ngpu} \
@@ -97,10 +97,10 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.en.tok \
-        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.de.tok \
-        --valid-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.tok \
-        --valid-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.de.tok
+        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.en.id \
+        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.de.id \
+        --valid-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.id \
+        --valid-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.de.id
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
@@ -112,24 +112,24 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     (
         decode_dir=decode_${rtask}_$(basename ${decode_config%.*})
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
-
+        mkdir -p ${expdir}/${decode_dir}
+        mkdir -p exp/${decode_dir}
         # split data
-        splitjson.py --parts ${nj} ${feat_recog_dir}/data.${src_case}_${tgt_case}.json
 
         #### use CPU for decoding
         ngpu=0
 
-        ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
+        ${decode_cmd} exp/${decode_dir}/decode.log \
             mt_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
             --batchsize 0 \
-            --recog-json ${feat_recog_dir}/split${nj}utt/data.JOB.json \
-            --result-label ${expdir}/${decode_dir}/data.JOB.json \
+            --recog-path /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.id\
+            --result-label ${expdir}/${decode_dir}/result.txt \
             --model ${expdir}/results/${recog_model}
 
-        score_bleu.sh --case ${tgt_case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} fr ${dict_tgt} ${dict_src}
+        #score_bleu.sh --case ${tgt_case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} fr ${dict_tgt} ${dict_src}
 
     ) &
     pids+=($!) # store background pids

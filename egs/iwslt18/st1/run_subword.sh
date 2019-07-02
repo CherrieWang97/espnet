@@ -56,7 +56,7 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
+recog_set="tst2013.de"
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
     echo "stage -1: Data Download"
@@ -284,11 +284,11 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     pids=() # initialize pids
     for rtask in ${recog_set}; do
     (
-        decode_dir=decode_${rtask}
+        decode_dir=decode_${rtask}_new
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
         # split data
-        splitjson.py --parts ${nj} ${feat_recog_dir}/data.lc.json
+        #splitjson.py --parts ${nj} ${feat_recog_dir}/data.lc.json
 
         #### use CPU for decoding
         ngpu=0
@@ -309,7 +309,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}
         else
             set=$(echo ${rtask} | cut -f -1 -d ".")
-            local/score_bleu_reseg.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
+            local/score_bleu_reseg.sh --bpemodel /hdfs/resrchvc/v-chengw/iwslt18/data4st/data/lang_1char/train_unigram500.model ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
         fi
     ) &
     pids+=($!) # store background pids
