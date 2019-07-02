@@ -226,10 +226,10 @@ class E2E(MTInterface, torch.nn.Module):
         # 1. Encoder
         if self.replace_sos:
             ilens = np.fromiter((len(xx[1:]) for xx in xs), dtype=np.int64)
-            hs = [to_device(self, torch.from_numpy(xx[1:])) for xx in xs]
+            hs = [to_device(self, torch.from_numpy(xx[1:]).long()) for xx in xs]
         else:
             ilens = np.fromiter((len(xx) for xx in xs), dtype=np.int64)
-            hs = [to_device(self, torch.from_numpy(xx)) for xx in xs]
+            hs = [to_device(self, torch.from_numpy(xx).long()) for xx in xs]
         xpad = pad_list(hs, self.pad)
         hs_pad, hlens, _ = self.enc(self.dropout_emb_src(self.embed_src(xpad)), ilens)
 

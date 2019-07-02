@@ -42,6 +42,7 @@ def get_parser():
                         help='Debugmode')
     parser.add_argument('--dict', required=True,
                         help='Dictionary')
+    parser.add_argument('--vocab_size', default=5000, type=int)
     parser.add_argument('--seed', default=1, type=int,
                         help='Random seed')
     parser.add_argument('--debugdir', type=str,

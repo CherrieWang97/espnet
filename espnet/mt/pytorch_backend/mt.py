@@ -3,6 +3,7 @@
 
 # Copyright 2019 Kyoto University (Hirofumi Inaguma)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
+import pdb
 import json
 import logging
 import os
@@ -312,13 +313,35 @@ def trans(args):
                     best = best[1:]
                 if best[-1] == 2:
                     best = best[:-1]
+                one_best.append(best)
                 #one_best.append(id_to_sentence(train_args.char_list, best))
     else:
         def grouper(n, iterable, fillvalue=None):
             kargs = [iter(iterable)] * n
             return zip_longest(*kargs, fillvalue=fillvalue)
-
+        
+        lens = [len(sent) for sent in sentences]
+        sorted_index = sorted(range(len(lens)), key=lambda i: -lens[i])
+        sorted_sents = [sentences[i] for i in sorted_index]
+        start = 0
+        sort_one_best = []
+        with torch.no_grad():
+            while True:
+                end = min(len(sentences), start + args.batchsize)
+                pdb.set_trace()
+                y = model.translate_batch(sorted_sents[start:end], args, train_args.char_list)
+                for ret in y:
+                    best = ret[0]['yseq']
+                    if best[0] == 1:
+                        best = best[1:]
+                    if best[-1] == 2:
+                        best = best[:-1]
+                    sort_one_best.append(best)
+                start += args.batchsize
+                if end == len(sentences):
+                    break
+        one_best = [sort_one_best[sorted_index.index(i)] for i in range(len(sentences))]
 
     with open(args.result_label, 'w', encoding="utf-8") as f:
         for r in one_best:
-            f.write(r+"\n")
+            f.write(' '.join(list(map(str, r)))+"\n")

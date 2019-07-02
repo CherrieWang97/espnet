@@ -70,8 +70,8 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # below means the last number becomes eos/sos ID
         # note that sos/eos IDs are identical
-        self.sos = odim - 1
-        self.eos = odim - 1
+        self.sos = 1
+        self.eos = 2
 
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
@@ -234,7 +234,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if self.mtlalpha == 1:
             self.loss_att, acc = None, None
         else:
-            self.loss_att, acc = self.dec(hs_pad, hlens, ys_pad)
+            self.loss_att, acc, _ = self.dec(hs_pad, hlens, ys_pad)
         self.acc = acc
 
         # 4. compute cer without beam search

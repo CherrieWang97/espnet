@@ -3,7 +3,6 @@
 # Copyright 2017 Johns Hopkins University (Shinji Watanabe)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
-
 import copy
 import json
 import logging
@@ -256,7 +255,7 @@ def train(args):
         valid_json = json.load(f)['utts']
     utts = list(valid_json.keys())
     idim = int(valid_json[utts[0]]['input'][0]['shape'][-1])
-    odim = int(valid_json[utts[0]]['output'][0]['shape'][-1])
+    odim = args.vocab_size
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
 
