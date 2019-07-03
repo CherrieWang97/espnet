@@ -61,7 +61,7 @@ if sys.version_info[0] == 2:
 else:
     from itertools import zip_longest as zip_longest
 
-REPORT_INTERVAL = 20
+REPORT_INTERVAL = 100
 
 
 class CustomEvaluator(extensions.Evaluator):
@@ -297,7 +297,7 @@ def train(args):
                               batch_frames_out=args.batch_frames_out,
                               batch_frames_inout=args.batch_frames_inout
                               )
-    mt_train = make_mtbatchset(args.train_src, args.train_trg, args)
+    mt_train = make_mtbatchset(args.train_src, args.train_trg, args.mt_batch_size)
 
 
     load_tr = LoadInputsAndTargets(
@@ -359,7 +359,7 @@ def train(args):
                    trigger=training.triggers.MaxValueTrigger('validation/main/stacc'))
 
     # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(10, 'iteration'))
+    trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
 
     # epsilon decay in the optimizer
     if args.opt == 'adadelta':
@@ -397,7 +397,7 @@ def train(args):
     trainer.extend(extensions.PrintReport(
         report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
-    #trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
+    trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
     set_early_stop(trainer, args)
 
     # Run the training

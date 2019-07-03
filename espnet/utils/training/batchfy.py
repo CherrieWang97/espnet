@@ -400,26 +400,9 @@ def sequence_to_id(word_dict, sequence):
     return ids
 
 
-def make_mtbatchset(src_data_path, trg_data_path, args):
+def make_mtbatchset(src_data_path, trg_data_path, batch_size):
     """Make batch set from json dictionary
 
-    :param Dict[str, Dict[str, Any]] data: dictionary loaded from data.json
-    :param int batch_size: maximum number of sequences in a minibatch.
-    :param int batch_bins: maximum number of bins (frames x dim) in a minibatch.
-    :param int batch_frames_in:  maximum number of input frames in a minibatch.
-    :param int batch_frames_out: maximum number of output frames in a minibatch.
-    :param int batch_frames_out: maximum number of input+output frames in a minibatch.
-    :param str count: strategy to count maximum size of batch.
-        For choices, see espnet.asr.batchfy.BATCH_COUNT_CHOICES
-
-    :param int max_length_in: maximum length of input to decide adaptive batch size
-    :param int max_length_out: maximum length of output to decide adaptive batch size
-    :param int num_batches: # number of batches to use (for debug)
-    :param int min_batch_size: minimum batch size (for multi-gpu)
-    :param bool shortest_first: Sort from batch with shortest samples to longest if true, otherwise reverse
-        :return: List[List[Tuple[str, dict]]] list of batches
-    :param str batch_sort_key: how to sort data before creating minibatches ["input", "output", "shuffle"]
-    :param bool swap_io: if True, use "input" as output and "output" as input in `data` dict
     :param bool mt: if True, use 0-axis of "output" as output and 1-axis of "output" as input in `data` dict
     """
     logging.info("Read data from %s and %s" % (src_data_path, trg_data_path))
@@ -439,7 +422,7 @@ def make_mtbatchset(src_data_path, trg_data_path, args):
                 examples.append(example)
     examples.sort(key=lambda x: -len(x[0]))
     batch_per_group = 8
-    n = batch_per_group * args.batch_size
+    n = batch_per_group * batch_size
     start = 0
     groups = []
     while True:
@@ -455,7 +438,7 @@ def make_mtbatchset(src_data_path, trg_data_path, args):
     for group in groups:
         start = 0
         while True:
-            end = min(start + args.batch_size, len(group))
+            end = min(start + batch_size, len(group))
             batch = group[start: end]
             batch.sort(key=lambda x: -len(x[0]))
             batchset.append(batch)
