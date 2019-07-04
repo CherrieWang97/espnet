@@ -153,11 +153,11 @@ class E2E(ASRInterface, torch.nn.Module):
         self.rnnlm = None
 
         self.logzero = -10000000000.0
-        self.stloss = 10000000.0
-        self.asrloss = 10000000.0
-        self.stacc = 0.0
-        self.asracc = 0.0
-        self.ppl = 10000000.0
+        self.stloss = None
+        self.asrloss = None
+        self.stacc = None
+        self.asracc = None
+        self.ppl = None
 
     def init_like_chainer(self):
         """Initialize weight like chainer
@@ -244,20 +244,18 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "asr":
             loss, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
             self.asracc = acc
-            self.asrloss = loss
-            loss_data = float(self.asrloss)
+            self.asrloss = float(loss)
         elif task == "st":
             loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 1, tgt_lang_ids=tgt_lang_ids)
             self.stacc = acc
-            self.stloss = loss
-            loss_data = float(self.stloss)
+            self.stloss = float(loss)
         else:
             loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 0, tgt_lang_ids=tgt_lang_ids)
-            self.ppl = ppl
-            loss_data = float(loss)
+            self.ppl = float(ppl)
 
+        loss_data = float(loss)
         if not math.isnan(loss_data):
-            self.reporter.report(float(self.stloss), self.stacc, float(self.asrloss), self.asracc, self.ppl)
+            self.reporter.report(self.stloss, self.stacc, self.asrloss, self.asracc, self.ppl)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return loss

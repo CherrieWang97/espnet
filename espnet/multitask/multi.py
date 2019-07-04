@@ -144,11 +144,11 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
-        if self.iteration % 100 < 60:
+        if self.iteration % 1000 < 600:
             batch = st_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x).mean()
-        elif self.iteration % 100 >=  80:
+        elif self.iteration % 1000 >=  800:
             batch = asr_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x, task="asr").mean()
@@ -366,20 +366,20 @@ def train(args):
         if args.criterion == 'acc':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/acc',
+                               'validation/main/stacc',
                                lambda best_value, current_value: best_value > current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/acc',
+                               'validation/main/stacc',
                                lambda best_value, current_value: best_value > current_value))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/loss',
+                               'validation/main/stloss',
                                lambda best_value, current_value: best_value < current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/loss',
+                               'validation/main/stloss',
                                lambda best_value, current_value: best_value < current_value))
 
     # Write a log of evaluation statistics for each epoch
@@ -397,7 +397,7 @@ def train(args):
     trainer.extend(extensions.PrintReport(
         report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
-    trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
+    #trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
     set_early_stop(trainer, args)
 
     # Run the training

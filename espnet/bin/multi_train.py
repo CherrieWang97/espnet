@@ -156,6 +156,7 @@ def get_parser():
                         help='How to count batch_size. The default (auto) will find how to count by args.')
     parser.add_argument('--batch-size', '--batch-seqs', '-b', default=0, type=int,
                         help='Maximum seqs in a minibatch (0 to disable)')
+    parser.add_argument('--mt-batch-size', default=32, type=int)
     parser.add_argument('--batch-bins', default=0, type=int,
                         help='Maximum bins in a minibatch (0 to disable)')
     parser.add_argument('--batch-frames-in', default=0, type=int,
