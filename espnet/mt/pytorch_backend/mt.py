@@ -174,8 +174,8 @@ def train(args):
 
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
-    train = make_mtbatchset(args.train_src, args.train_trg, args)
-    valid = make_mtbatchset(args.valid_src, args.valid_trg, args)
+    train = make_mtbatchset(args.train_src, args.train_trg, args.batch_size)
+    valid = make_mtbatchset(args.valid_src, args.valid_trg, args.batch_size)
 
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list

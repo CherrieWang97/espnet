@@ -57,7 +57,7 @@ class Decoder(torch.nn.Module):
         if embed:
             self.embed = embed
         else:
-            self.embed = torch.nn.Embedding(odim, dunits, _weight=embed_weight)
+            self.embed = torch.nn.Embedding(odim, dunits)
         self.dropout_emb = torch.nn.Dropout(p=dropout)
 
         self.decoder = torch.nn.ModuleList()

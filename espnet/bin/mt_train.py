@@ -47,7 +47,7 @@ def get_parser():
     parser.add_argument('--dict-src', default='', nargs='?',
                         help='Dictionary for source language. \
                         Dictionanies are shared between soruce and target languages in default setting.')
-    parser.add_argument('--share-dict', default=False, nargs='?')
+    parser.add_argument('--share-dict', default=True, nargs='?')
     parser.add_argument('--seed', default=1, type=int,
                         help='Random seed')
     parser.add_argument('--debugdir', type=str,
@@ -257,7 +257,7 @@ def main(cmd_args):
         with open(args.dict_tgt, 'rb') as f:
             dictionary = f.readlines()
         for entry in dictionary:
-            entry = entry.decode('utf-8').split('\t')
+            entry = entry.decode('utf-8').split(' ')
             word = entry[0]
             tgt_dict[word] = lineno
             char_list.append(word)
