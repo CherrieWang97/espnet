@@ -15,11 +15,7 @@ debugmode=1
 dumpdir=dump    # directory to dump full features
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
-<<<<<<< HEAD
-resume=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.4         # Resume the training from snapshot
-=======
 resume= #/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.1         # Resume the training from snapshot
->>>>>>> 0a4e8ffa53ecff643aff0b11432dc3c9bc6af493
 seed=1          # seed to generate random number
 # feature configuration
 do_delta=false

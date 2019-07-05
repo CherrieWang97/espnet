@@ -73,16 +73,17 @@ class E2E(MTInterface, torch.nn.Module):
         # multilingual related
         self.replace_sos = args.replace_sos
 
-        # encoder
-        self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2)
-        # NOTE: +1 means the padding index
-        self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
         self.enc = encoder_for(args, args.eunits, self.subsample)
         # attention
         self.att = att_for(args)
         # decoder
         self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
-
+        if args.share_dict:
+            self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2, _weight=self.dec.embed.weight)
+        else:
+            self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2)
+        # NOTE: +1 means the padding index
+        self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
         # weight initialization
         self.init_like_chainer()
 

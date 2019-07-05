@@ -255,7 +255,7 @@ def train(args):
         valid_json = json.load(f)['utts']
     utts = list(valid_json.keys())
     idim = int(valid_json[utts[0]]['input'][0]['shape'][-1])
-    odim = args.vocab_size
+    odim = len(args.char_list)
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
 

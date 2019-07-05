@@ -115,6 +115,8 @@ def train(args):
     # get input and output dimension info
     idim = args.src_vocab
     odim = args.tgt_vocab
+    if args.share_dict:
+        idim = odim
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
     
