@@ -193,7 +193,7 @@ def _adadelta_eps_decay(trainer, eps_decay):
 
 
 def torch_snapshot(savefun=torch.save,
-                   filename='snapshot.ep.{.updater.epoch}'):
+                   filename='snapshot.ep.{.updater.iteration}'):
     """Returns a trainer extension to take snapshots of the trainer for pytorch."""
 
     @extension.make_extension(trigger=(1, 'epoch'), priority=-100)

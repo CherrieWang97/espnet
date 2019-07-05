@@ -5,7 +5,6 @@
 
 
 from __future__ import division
-import pdb
 import argparse
 import logging
 import math
@@ -57,7 +56,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
     """
 
-    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None):
+    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None):
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
         self.senctype = args.senctype   #speech encoder type
@@ -147,7 +146,22 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'trgdec' in n or 'trgatt.0' in n:
                         p.data = param_dict[mt_dec_n].data
                         logging.warning('Overwrite %s' % n)
-
+        if st_model is not None:
+            param_dict = dict(st_model.named_parameters())
+            for n, p in self.named_parameters():
+                st_n = n.lstrip('s')
+                if 'senc.enc' in n and st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
+                    p.data = param_dict[st_n].data
+                    logging.warning('Overwrite %s' % n)
+                st_n = n.lstrip('trg')
+                if st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
+                    if 'trgdec' in n:
+                        p.data = param_dict[st_n].data
+                        logging.warning('Overwrite %s' % n)
+                st_n = n.replace('trgatt.1', 'att.0')
+                if st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
+                    p.data = param_dict[st_n].data
+                    logging.warning('Overwrite %s' % n)
 
         # options for beam search
         self.rnnlm = None
@@ -298,7 +312,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm)
+        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
 
         if prev:
             self.train()
@@ -342,7 +356,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         hlens = torch.tensor(list(map(int, hlens)))  # make sure hlens is tensor
-        y = self.trgdec.recognize_beam_batch(hs_pad, hlens, lpz, recog_args, char_list, rnnlm)
+        y = self.trgdec.recognize_beam_batch(hs_pad, hlens, lpz, recog_args, char_list, rnnlm, strm_idx=1)
 
         if prev:
             self.train()

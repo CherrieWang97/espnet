@@ -2,7 +2,6 @@
 
 # Copyright 2017 Johns Hopkins University (Shinji Watanabe)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
-import pdb
 import copy
 import json
 import logging
@@ -411,39 +410,21 @@ def recog(args):
     :param Namespace args: The program arguments
     """
     set_deterministic_pytorch(args)
-    model, train_args = load_trained_model(args.model)
+    idim, src_vocab, trg_vocab, train_args = get_model_conf(args.model, os.path.join(os.path.dirname(args.model), 'model.json'))
+    logging.info('reading model parameters from ' + args.model)
+    if args.st_model:
+        st_model, _ = load_trained_model(args.st_model)
+        assert isinstance(st_model, ASRInterface)
+  
+    model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model)
+    #torch_load(args.model, model)
+    if args.st_model:
+        del st_model
     assert isinstance(model, ASRInterface)
     model.recog_args = args
 
     # read rnnlm
-    if args.rnnlm:
-        rnnlm_args = get_model_conf(args.rnnlm, args.rnnlm_conf)
-        rnnlm = lm_pytorch.ClassifierWithState(
-            lm_pytorch.RNNLM(
-                len(train_args.char_list), rnnlm_args.layer, rnnlm_args.unit))
-        torch_load(args.rnnlm, rnnlm)
-        rnnlm.eval()
-    else:
-        rnnlm = None
-
-    if args.word_rnnlm:
-        rnnlm_args = get_model_conf(args.word_rnnlm, args.word_rnnlm_conf)
-        word_dict = rnnlm_args.char_list_dict
-        char_dict = {x: i for i, x in enumerate(train_args.char_list)}
-        word_rnnlm = lm_pytorch.ClassifierWithState(lm_pytorch.RNNLM(
-            len(word_dict), rnnlm_args.layer, rnnlm_args.unit))
-        torch_load(args.word_rnnlm, word_rnnlm)
-        word_rnnlm.eval()
-
-        if rnnlm is not None:
-            rnnlm = lm_pytorch.ClassifierWithState(
-                extlm_pytorch.MultiLevelLM(word_rnnlm.predictor,
-                                           rnnlm.predictor, word_dict, char_dict))
-        else:
-            rnnlm = lm_pytorch.ClassifierWithState(
-                extlm_pytorch.LookAheadWordLM(word_rnnlm.predictor,
-                                              word_dict, char_dict))
-
+    rnnlm = None
     # gpu
     if args.ngpu == 1:
         gpu_id = list(range(args.ngpu))
@@ -456,13 +437,11 @@ def recog(args):
     with open(args.recog_json, 'rb') as f:
         js = json.load(f)['utts']
     new_js = {}
-
     load_inputs_and_targets = LoadInputsAndTargets(
         mode='asr', load_output=False, sort_in_input_length=False,
         preprocess_conf=train_args.preprocess_conf
         if args.preprocess_conf is None else args.preprocess_conf,
         preprocess_args={'train': False})
-
     if args.batchsize == 0:
         with torch.no_grad():
             for idx, name in enumerate(js.keys(), 1):
