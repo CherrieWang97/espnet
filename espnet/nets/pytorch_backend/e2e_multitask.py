@@ -111,11 +111,15 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
+        if args.share_dict:
+            embed = self.srcdec.embed
+        else:
+            embed = None
         self.trgdec = Decoder(args.eprojs, trg_vocab_size, args.dtype, args.trgdlayers, args.dunits, self.sos, self.eos, self.trgatt,
                                args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
-                                args.context_residual, args.replace_sos)
+                                args.context_residual, args.replace_sos, embed=embed)
         self.embed = self.srcdec.embed
         self.dropout_emb = self.srcdec.dropout_emb
 

@@ -47,14 +47,17 @@ class Decoder(torch.nn.Module):
 
     def __init__(self, eprojs, odim, dtype, dlayers, dunits, sos, eos, att, verbose=0,
                  char_list=None, labeldist=None, lsm_weight=0., sampling_probability=0.0,
-                 dropout=0.0, context_residual=False, replace_sos=False):
+                 dropout=0.0, context_residual=False, replace_sos=False, embed=None):
 
         super(Decoder, self).__init__()
         self.dtype = dtype
         self.dunits = dunits
         self.dlayers = dlayers
         self.context_residual = context_residual
-        self.embed = torch.nn.Embedding(odim, dunits)
+        if embed:
+            self.embed = embed
+        else:
+            self.embed = torch.nn.Embedding(odim, dunits, _weight=embed_weight)
         self.dropout_emb = torch.nn.Dropout(p=dropout)
 
         self.decoder = torch.nn.ModuleList()
