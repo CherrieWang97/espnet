@@ -47,7 +47,7 @@ from espnet.utils.training.iterators import ToggleableShufflingSerialIterator
 from espnet.utils.training.tensorboard_logger import TensorboardLogger
 from espnet.utils.training.train_utils import check_early_stop
 from espnet.utils.training.train_utils import set_early_stop
-
+from espnet.nets.pytorch_backend.e2e_asr import pad_list
 from espnet.asr.pytorch_backend.asr import load_trained_model
 
 from espnet.nets.pytorch_backend.e2e_universe import E2E
@@ -245,6 +245,7 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
+        pdb.set_trace()
         if self.iteration % 1000 < 600:
             batch = st_iter.next()
             x = self.converter(batch, self.device, self.trg_id)
@@ -319,7 +320,7 @@ def train(args):
     model_conf = args.outdir + '/model.json'
     with open(model_conf, 'wb') as f:
         logging.info('writing a model config file to ' + model_conf)
-        f.write(json.dumps((idim, args.src_vocab, args.trg_vocab, vars(args)),
+        f.write(json.dumps((idim, args.vocab_size, vars(args)),
                            indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
     for key in sorted(vars(args).keys()):
         logging.info('ARGS: ' + key + ': ' + str(vars(args)[key]))
@@ -425,7 +426,6 @@ def train(args):
     iters = {"main": train_iter,
              "asr": asr_iter,
              "mt": mt_iter}
-    pdb.set_trace()
     # Set up a trainer
     updater = CustomUpdater(
         model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)

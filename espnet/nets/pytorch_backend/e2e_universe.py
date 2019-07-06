@@ -82,13 +82,6 @@ class E2E(ASRInterface, torch.nn.Module):
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
         subsample = np.ones(args.elayers + 1, dtype=np.int)
-        if args.etype.endswith("p") and not args.etype.startswith("vgg"):
-            ss = args.subsample.split("_")
-            for j in range(min(args.elayers + 1, len(ss))):
-                subsample[j] = int(ss[j])
-        else:
-            logging.warning(
-                'Subsampling is not performed for vgg*. It is performed in max pooling layers at CNN.')
         logging.info('subsample: ' + ' '.join([str(x) for x in subsample]))
         self.subsample = subsample
 
@@ -104,16 +97,16 @@ class E2E(ASRInterface, torch.nn.Module):
 
 
         self.frontend = None
-        self.prenet = PreNet(idim, 2, args.eunits / 2, args.dropout)
+        self.prenet = PreNet(idim, 2, args.eunits // 2, args.dropout_rate)
         self.ctc = ctc_for(args, odim)
         # encoder
         self.embed_src = torch.nn.Embedding(odim, args.eunits, padding_idx=self.eos, _weight=self.ctc.ctc_lo.weight)
         self.dropemb = torch.nn.Dropout(p=args.dropout_rate)
-        self.enc = Encoder('blstm', args.eunits, args.elayers - 1, args.eprojs, subsample, dropout=args.dropout)
+        self.enc = Encoder('blstm', args.eunits, args.elayers - 1, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
         # attention
         self.att = att_for(args)
         # decoder
-        self.dec = decoder_for(args, odim, self.sos, self.eos, self.srcatt, labeldist)
+        self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
 
         # weight initialization
         self.init_like_chainer()
@@ -219,7 +212,7 @@ class E2E(ASRInterface, torch.nn.Module):
         """
         # 0. prenet
         if task == "st" or task == "asr":
-            hs_pad, hlens = self.prenet(xs_pad, ilens)
+            hs_pad, hlens, _ = self.prenet(xs_pad, ilens)
         else:
             hs_pad, hlens = self.drop_emb(self.embed_src(xs_pad), ilens)
 
@@ -227,6 +220,8 @@ class E2E(ASRInterface, torch.nn.Module):
         if self.replace_sos:
             tgt_lang_ids = ys_pad[:, 0:1]
             ys_pad = ys_pad[:, 1:]  # remove target language ID in the beggining
+            if task == "mt":
+                xs_pad = xs_pad[:, 1:]
         else:
             tgt_lang_ids = None
 

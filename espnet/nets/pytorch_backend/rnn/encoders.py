@@ -209,11 +209,8 @@ class RNNPre(torch.nn.Module):
 
     def __init__(self, idim, elayers, cdim, dropout, typ="blstm"):
         super(RNNPre, self).__init__()
-        bidir = typ[0] == "b"
         self.nbrnn = torch.nn.LSTM(idim, cdim, elayers, batch_first=True,
-                                   dropout=dropout, bidirectional=bidir) if "lstm" in typ \
-            else torch.nn.GRU(idim, cdim, elayers, batch_first=True, dropout=dropout,
-                              bidirectional=bidir)
+                                   dropout=dropout, bidirectional=True) 
         self.typ = typ
 
     def forward(self, xs_pad, ilens, prev_state=None):
@@ -236,15 +233,15 @@ class RNNPre(torch.nn.Module):
         # ys: utt list of frame x cdim x 2 (2: means bidirectional)
         ys_pad, ilens = pad_packed_sequence(ys, batch_first=True)
 
-        return xs_pad, ilens, states  # x: utt list of frame x dim
+        return ys_pad, ilens, states  # x: utt list of frame x dim
 
 
 
 class PreNet(torch.nn.Module):
-    def __init__(self, idim, elayers, eunits, dropout, in_channel=-1):
+    def __init__(self, idim, elayers, eunits, dropout, in_channel=1):
+        super(PreNet, self).__init__()
         self.enc = torch.nn.ModuleList([VGG2L(in_channel),
-                                        RNNPre(get_vgg2l_odim(idim, in_channel=in_channel), elayers, eunits,
-                                            dropout)])
+                                        RNNPre(get_vgg2l_odim(idim, in_channel=in_channel), elayers, eunits, dropout)])
 
     def forward(self, xs_pad, ilens, prev_states=None):
         """Encoder forward

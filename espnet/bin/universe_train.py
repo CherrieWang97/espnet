@@ -115,6 +115,14 @@ def get_parser():
                         help='Label smoothing weight')
     parser.add_argument('--sampling-probability', default=0.0, type=float,
                         help='Ratio of predicted labels fed back to decoder')
+    parser.add_argument('--mtlalpha', default=0.5, type=float,
+                        help='Multitask learning coefficient, alpha: alpha*ctc_loss + (1-alpha)*att_loss ')
+    parser.add_argument('--ctc_type', default='warpctc', type=str,
+                        choices=['builtin', 'warpctc'],
+                        help='Type of CTC implementation to calculate loss.')
+    parser.add_argument('--ctc-weight', default=0.3, type=float,
+                        help='CTC weight in joint decoding')
+
     # recognition options to compute CER/WER
     parser.add_argument('--nbest', type=int, default=1,
                         help='Output N-best hypotheses')
