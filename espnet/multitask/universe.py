@@ -119,11 +119,10 @@ class MTConverter(object):
     :param int idim : index for <pad> in the source language
     """
 
-    def __init__(self, src_id, trg_id):
+    def __init__(self, lang_id):
         self.pad = 2
         self.ignore_id = -1
-        self.src_id = src_id
-        self.trg_id = trg_id
+        self.trg_id = lang_id
 
     def __call__(self, batch, device):
         """Transforms a batch and send it to a device
@@ -149,7 +148,6 @@ class MTConverter(object):
         for item in batch:
             xs, ys = item
             ilens = len(xs)
-            xs = np.concatenate([[self.src_id], xs])
             ys = np.concatenate([[self.trg_id], ys])
             src.append(xs)
             tgt.append(ys)
@@ -245,7 +243,6 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
-        pdb.set_trace()
         if self.iteration % 1000 < 600:
             batch = st_iter.next()
             x = self.converter(batch, self.device, self.trg_id)
@@ -257,9 +254,9 @@ class CustomUpdater(training.StandardUpdater):
         else:
             batch = mt_iter.next()
             xs, ilens, ys = batch[0]
-            xs.to(self.device)
-            ilens.to(self.device)
-            ys.to(self.device)
+            xs = xs.to(self.device)
+            ilens = ilens.to(self.device)
+            ys = ys.to(self.device)
             loss = self.model(xs, ilens, ys, task="mt").mean()
         loss.backward()
         self.iteration += 1
@@ -358,7 +355,7 @@ def train(args):
 
     # Setup a converter
     converter = ASRConverter(subsampling_factor=subsampling_factor)
-    mt_converter = MTConverter(args.src_id, args.trg_id)
+    mt_converter = MTConverter(args.trg_id)
 
     # read json data
     with open(args.train_json, 'rb') as f:

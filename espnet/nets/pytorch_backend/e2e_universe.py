@@ -214,14 +214,13 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "st" or task == "asr":
             hs_pad, hlens, _ = self.prenet(xs_pad, ilens)
         else:
-            hs_pad, hlens = self.drop_emb(self.embed_src(xs_pad), ilens)
+            hs_pad = self.dropemb(self.embed_src(xs_pad))
+            hlens = ilens
 
         # 1. Encoder
         if self.replace_sos:
             tgt_lang_ids = ys_pad[:, 0:1]
             ys_pad = ys_pad[:, 1:]  # remove target language ID in the beggining
-            if task == "mt":
-                xs_pad = xs_pad[:, 1:]
         else:
             tgt_lang_ids = None
 
@@ -256,6 +255,8 @@ class E2E(ASRInterface, torch.nn.Module):
                     cers.append(editdistance.eval(hyp_chars, ref_chars) / len(ref_chars))
 
             cer_ctc = sum(cers) / len(cers) if cers else None
+        else:
+            cer_ctc = 0
 
 
         alpha = self.mtlalpha
