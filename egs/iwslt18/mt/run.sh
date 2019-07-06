@@ -86,6 +86,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --tensorboard-dir tensorboard/${expname} \
         --debugmode ${debugmode} \
         --dict-tgt ${dict} \
+        --tgt-vocab 10000 \
         --debugdir ${expdir} \
         --minibatches ${N} \
         --seed ${seed} \
