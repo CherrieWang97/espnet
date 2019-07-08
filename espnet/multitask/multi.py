@@ -396,7 +396,7 @@ def train(args):
     trainer.extend(extensions.PrintReport(
         report_keys), trigger=(REPORT_INTERVAL, 'iteration'))
 
-    #trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
+    trainer.extend(extensions.ProgressBar(update_interval=REPORT_INTERVAL))
     set_early_stop(trainer, args)
 
     # Run the training
