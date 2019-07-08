@@ -73,16 +73,18 @@ class E2E(MTInterface, torch.nn.Module):
         # multilingual related
         self.replace_sos = args.replace_sos
 
-        # encoder
-        self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2)
-        # NOTE: +1 means the padding index
-        self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
         self.enc = encoder_for(args, args.eunits, self.subsample)
         # attention
         self.att = att_for(args)
         # decoder
         self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
-
+        if args.share_dict:
+            self.embed_src = self.dec.embed
+            self.dropout_emb_src = self.dec.dropout_emb
+        else:
+            self.embed_src = torch.nn.Embedding(idim, args.eunits, padding_idx=2)
+            self.dropout_emb_src = torch.nn.Dropout(p=args.dropout_rate)
+        # NOTE: +1 means the padding index
         # weight initialization
         self.init_like_chainer()
 
@@ -146,8 +148,10 @@ class E2E(MTInterface, torch.nn.Module):
         """
         # 1. Encoder
         xs_pad, ys_pad, tgt_lang_ids = self.target_lang_biasing_train(xs_pad, ilens, ys_pad)
-        hs_pad, hlens, _ = self.enc(self.dropout_emb_src(self.embed_src(xs_pad)), ilens)
-
+        if self.dropout_emb_src:
+            hs_pad, hlens, _ = self.enc(self.dropout_emb_src(self.embed_src(xs_pad)), ilens)
+        else:
+            hs_pad, hlens, _ = self.enc(self.embed_src(xs_pad), ilens)
         # 3. attention loss
         loss, acc, ppl = self.dec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
         self.acc = acc
@@ -201,8 +205,10 @@ class E2E(MTInterface, torch.nn.Module):
         else:
             ilen = [len(x[0])]
             h = to_device(self, torch.from_numpy(np.fromiter(map(int, x[0]), dtype=np.int64)))
-        hs, _, _ = self.enc(self.dropout_emb_src(self.embed_src(h.unsqueeze(0))), ilen)
-
+        if self.dropout_emb_src:
+            hs, _, _ = self.enc(self.dropout_emb_src(self.embed_src(h.unsqueeze(0))), ilen)
+        else:
+            hs, _, _ = self.enc(self.embed_src(h.unsqueeze(0)), ilen)
         # 2. decoder
         # decode the first utterance
         y = self.dec.recognize_beam(hs[0], None, trans_args, char_list, rnnlm)

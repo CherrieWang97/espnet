@@ -196,6 +196,75 @@ class VGG2L(torch.nn.Module):
             xs_pad.size(0), xs_pad.size(1), xs_pad.size(2) * xs_pad.size(3))
         return xs_pad, ilens, None  # no state in this layer
 
+class RNNPre(torch.nn.Module):
+    """RNN module
+
+    :param int idim: dimension of inputs
+    :param int elayers: number of encoder layers
+    :param int cdim: number of rnn units (resulted in cdim * 2 if bidirectional)
+    :param int hdim: number of final projection units
+    :param float dropout: dropout rate
+    :param str typ: The RNN type
+    """
+
+    def __init__(self, idim, elayers, cdim, dropout, typ="blstm"):
+        super(RNNPre, self).__init__()
+        self.nbrnn = torch.nn.LSTM(idim, cdim, elayers, batch_first=True,
+                                   dropout=dropout, bidirectional=True) 
+        self.typ = typ
+
+    def forward(self, xs_pad, ilens, prev_state=None):
+        """RNN forward
+
+        :param torch.Tensor xs_pad: batch of padded input sequences (B, Tmax, D)
+        :param torch.Tensor ilens: batch of lengths of input sequences (B)
+        :param torch.Tensor prev_state: batch of previous RNN states
+        :return: batch of hidden state sequences (B, Tmax, eprojs)
+        :rtype: torch.Tensor
+        """
+        logging.info(self.__class__.__name__ + ' input lengths: ' + str(ilens))
+        xs_pack = pack_padded_sequence(xs_pad, ilens, batch_first=True)
+        self.nbrnn.flatten_parameters()
+        if prev_state is not None and self.nbrnn.bidirectional:
+            # We assume that when previous state is passed, it means that we're streaming the input
+            # and therefore cannot propagate backward BRNN state (otherwise it goes in the wrong direction)
+            prev_state = reset_backward_rnn_state(prev_state)
+        ys, states = self.nbrnn(xs_pack, hx=prev_state)
+        # ys: utt list of frame x cdim x 2 (2: means bidirectional)
+        ys_pad, ilens = pad_packed_sequence(ys, batch_first=True)
+
+        return ys_pad, ilens, states  # x: utt list of frame x dim
+
+
+
+class PreNet(torch.nn.Module):
+    def __init__(self, idim, elayers, eunits, dropout, in_channel=1):
+        super(PreNet, self).__init__()
+        self.enc = torch.nn.ModuleList([VGG2L(in_channel),
+                                        RNNPre(get_vgg2l_odim(idim, in_channel=in_channel), elayers, eunits, dropout)])
+
+    def forward(self, xs_pad, ilens, prev_states=None):
+        """Encoder forward
+
+        :param torch.Tensor xs_pad: batch of padded input sequences (B, Tmax, D)
+        :param torch.Tensor ilens: batch of lengths of input sequences (B)
+        :param torch.Tensor prev_state: batch of previous encoder hidden states (?, ...)
+        :return: batch of hidden state sequences (B, Tmax, eprojs)
+        :rtype: torch.Tensor
+        """
+        if prev_states is None:
+            prev_states = [None] * len(self.enc)
+        assert len(prev_states) == len(self.enc)
+
+        current_states = []
+        for module, prev_state in zip(self.enc, prev_states):
+            xs_pad, ilens, states = module(xs_pad, ilens, prev_state=prev_state)
+            current_states.append(states)
+
+        # make mask to remove bias value in padded part
+        mask = to_device(self, make_pad_mask(ilens).unsqueeze(-1))
+
+        return xs_pad.masked_fill(mask, 0.0), ilens, current_states
 
 class Encoder(torch.nn.Module):
     """Encoder module

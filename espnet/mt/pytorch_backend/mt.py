@@ -115,6 +115,8 @@ def train(args):
     # get input and output dimension info
     idim = args.src_vocab
     odim = args.tgt_vocab
+    if args.share_dict:
+        idim = odim
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
     
@@ -228,7 +230,7 @@ def train(args):
                    trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
     # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
+    trainer.extend(torch_snapshot(), trigger=(10000, 'iteration'))
     
     # epsilon decay in the optimizer
     if args.opt == 'adadelta':

@@ -33,21 +33,16 @@ def get_parser():
 
     parser.add_argument('--ngpu', default=0, type=int,
                         help='Number of GPUs')
-    parser.add_argument('--backend', default='chainer', type=str,
+    parser.add_argument('--backend', default='pytorch', type=str,
                         choices=['chainer', 'pytorch'],
                         help='Backend library')
     parser.add_argument('--outdir', type=str, required=True,
                         help='Output directory')
     parser.add_argument('--debugmode', default=1, type=int,
                         help='Debugmode')
-    parser.add_argument('--dict-tgt', required=True,
+    parser.add_argument('--dict', required=True,
                         help='Dictionary for target language')
-    parser.add_argument('--src-vocab', default=5000, type=int)
-    parser.add_argument('--tgt-vocab', default=5000, type=int)
-    parser.add_argument('--dict-src', default='', nargs='?',
-                        help='Dictionary for source language. \
-                        Dictionanies are shared between soruce and target languages in default setting.')
-    parser.add_argument('--share-dict', default=True, nargs='?')
+    parser.add_argument('--vocab-size', default=10000, type=int)
     parser.add_argument('--seed', default=1, type=int,
                         help='Random seed')
     parser.add_argument('--debugdir', type=str,
@@ -64,6 +59,9 @@ def get_parser():
                         help='Filename of train label data (json)')
     parser.add_argument('--train-trg', type=str, default=None,
                         help="File name of target data")
+    parser.add_argument('--train-json', type=str, default=None)
+    parser.add_argument('--asr-json', type=str, default=None)
+    parser.add_argument('--valid-json', type=str, default=None)
     parser.add_argument('--valid-src', type=str, default=None,
                         help='Filename of validation label data (json)')
     parser.add_argument('--valid-trg', type=str, default=None,
@@ -71,11 +69,10 @@ def get_parser():
     # network architecture
     parser.add_argument('--model-module', type=str, default=None,
                         help='model defined module (default: espnet.nets.xxx_backend.e2e_mt:E2E)')
+    parser.add_argument('--asr-model', type=str, default=None)
+    parser.add_argument('--mt-model', type=str, default=None)
+    parser.add_argument('--st-model', type=str, default=None)
     # encoder
-    parser.add_argument('--etype', default='blstmp', type=str,
-                        choices=['lstm', 'blstm', 'lstmp', 'blstmp',
-                                 'gru', 'bgru', 'grup', 'bgrup'],
-                        help='Type of encoder network architecture (VGG is not supported for NMT)')
     parser.add_argument('--elayers', default=4, type=int,
                         help='Number of encoder layers')
     parser.add_argument('--eunits', '-u', default=1024, type=int,
@@ -108,7 +105,7 @@ def get_parser():
     parser.add_argument('--dtype', default='lstm', type=str,
                         choices=['lstm', 'gru'],
                         help='Type of decoder network architecture')
-    parser.add_argument('--dlayers', default=1, type=int,
+    parser.add_argument('--dlayers', default=2, type=int,
                         help='Number of decoder layers')
     parser.add_argument('--dunits', default=1024, type=int,
                         help='Number of decoder hidden units')
@@ -118,6 +115,14 @@ def get_parser():
                         help='Label smoothing weight')
     parser.add_argument('--sampling-probability', default=0.0, type=float,
                         help='Ratio of predicted labels fed back to decoder')
+    parser.add_argument('--mtlalpha', default=0.5, type=float,
+                        help='Multitask learning coefficient, alpha: alpha*ctc_loss + (1-alpha)*att_loss ')
+    parser.add_argument('--ctc_type', default='warpctc', type=str,
+                        choices=['builtin', 'warpctc'],
+                        help='Type of CTC implementation to calculate loss.')
+    parser.add_argument('--ctc-weight', default=0.3, type=float,
+                        help='CTC weight in joint decoding')
+
     # recognition options to compute CER/WER
     parser.add_argument('--nbest', type=int, default=1,
                         help='Output N-best hypotheses')
@@ -153,6 +158,7 @@ def get_parser():
                         help='How to count batch_size. The default (auto) will find how to count by args.')
     parser.add_argument('--batch-size', '--batch-seqs', '-b', default=0, type=int,
                         help='Maximum seqs in a minibatch (0 to disable)')
+    parser.add_argument('--mt-batch-size', default=32, type=int)
     parser.add_argument('--batch-bins', default=0, type=int,
                         help='Maximum bins in a minibatch (0 to disable)')
     parser.add_argument('--batch-frames-in', default=0, type=int,
@@ -200,7 +206,7 @@ def get_parser():
     parser.add_argument('--context-residual', default='', nargs='?',
                         help='')
     # multilingual NMT related
-    parser.add_argument('--replace-sos', default=False, nargs='?',
+    parser.add_argument('--replace-sos', default=True, nargs='?',
                         help='Replace <sos> in the decoder with a target language ID \
                               (the first token in the target sequence)')
 
@@ -216,12 +222,7 @@ def main(cmd_args):
         model_class = dynamic_import(args.model_module)
         model_class.add_arguments(parser)
     args = parser.parse_args(cmd_args)
-    if args.model_module is None:
-        args.model_module = "espnet.nets." + args.backend + "_backend.e2e_mt:E2E"
-    if 'chainer_backend' in args.model_module:
-        args.backend = 'chainer'
-    if 'pytorch_backend' in args.model_module:
-        args.backend = 'pytorch'
+    args.backend = 'pytorch'
 
     # logging info
     if args.verbose > 0:
@@ -250,36 +251,33 @@ def main(cmd_args):
     np.random.seed(args.seed)
 
     # load dictionary for debug log
-    tgt_dict = {}
-    if args.dict_tgt is not None:
+
+
+    if args.dict is not None:
         char_list = []
-        lineno = 0
-        with open(args.dict_tgt, 'rb') as f:
+        with open(args.dict, 'rb') as f:
             dictionary = f.readlines()
         for entry in dictionary:
             entry = entry.decode('utf-8').split(' ')
             word = entry[0]
-            tgt_dict[word] = lineno
             char_list.append(word)
-            lineno += 1
-        args.tgt_dict = tgt_dict
+        char_list.append("<en>")
+        char_list.append("<de>")
+        args.src_id = char_list.index("<en>")
+        args.trg_id = char_list.index("<de>")
         args.char_list = char_list
+        args.vocab_size += 2
+        assert args.vocab_size == len(args.char_list)
     else:
-        args.tgt_dict = None
         args.char_list = None
-
+        args.vocab_size += 2
 
     # train
-    logging.info('backend = ' + args.backend)
-    if args.backend == "chainer":
-        raise NotImplementedError("chainer is not supported for MT now.")
-        # TODO(hirofumi): support chainer backend
-    elif args.backend == "pytorch":
-        from espnet.mt.pytorch_backend.mt import train
-        train(args)
-    else:
-        raise ValueError("Only chainer and pytorch are supported.")
+
+    from espnet.multitask.universe import train
+    train(args)
 
 
 if __name__ == '__main__':
     main(sys.argv[1:])
+

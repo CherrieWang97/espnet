@@ -5,6 +5,7 @@
 
 
 from __future__ import division
+
 import argparse
 import logging
 import math
@@ -28,39 +29,44 @@ from espnet.nets.pytorch_backend.nets_utils import pad_list
 from espnet.nets.pytorch_backend.nets_utils import to_device
 from espnet.nets.pytorch_backend.nets_utils import to_torch_tensor
 from espnet.nets.pytorch_backend.rnn.attentions import att_for
-from espnet.nets.pytorch_backend.rnn.decoders import Decoder
+from espnet.nets.pytorch_backend.rnn.decoders import decoder_for
+from espnet.nets.pytorch_backend.rnn.encoders import PreNet
 from espnet.nets.pytorch_backend.rnn.encoders import Encoder
 
 CTC_LOSS_THRESHOLD = 10000
 
 
-
 class Reporter(chainer.Chain):
     """A chainer reporter wrapper"""
 
-    def report(self, stloss, stacc, asrloss, asracc, ppl):
+    def report(self, stloss, stacc, asrloss, ctcloss, cer_ctc, asracc, ppl):
         reporter.report({'stloss': stloss}, self)
         reporter.report({'stacc': stacc}, self)
         reporter.report({'asrloss': asrloss}, self)
+        reporter.report({'cer_ctc': cer_ctc}, self)
+        reporter.report({"ctcloss": ctcloss}, self)
         reporter.report({'asracc': asracc}, self)
         reporter.report({'ppl': ppl}, self)
+
+
+
 
 class E2E(ASRInterface, torch.nn.Module):
     """E2E module
 
-    :param int idim: dimension of inputs speech
-    :param int odim: size of vocabulary
+    :param int idim: dimension of inputs
+    :param int odim: dimension of outputs
     :param Namespace args: argument Namespace containing options
     :param E2E (torch.nn.Module) asr_model: pre-trained ASR model for encoder initialization
     :param E2E (torch.nn.Module) mt_model: pre-trained NMT model for decoder initialization
 
     """
 
-    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None):
+    def __init__(self, idim, odim, args, asr_model=None, mt_model=None):
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
-        self.senctype = args.senctype   #speech encoder type
-        self.tenctype = args.tenctype   #text encoder type
+        self.mtlalpha = args.mtlalpha
+        assert 0.0 <= self.mtlalpha <= 1.0, "mtlalpha should be [0.0, 1.0]"
         self.verbose = args.verbose
         self.char_list = args.char_list
         self.outdir = args.outdir
@@ -75,99 +81,70 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
-        subsample = np.ones(args.senclayers + 1, dtype=np.int)   #only use for speech encoder
-        if args.senctype.endswith("p") and not args.senctype.startswith("vgg"):
-            ss = args.subsample.split("_")
-            for j in range(min(args.senclayers + 1, len(ss))):
-                subsample[j] = int(ss[j])
-        else:
-            logging.warning(
-                 'Subsampling is not performed for vgg*. It is performed in max pooling layers at CNN.')
+        subsample = np.ones(args.elayers + 1, dtype=np.int)
         logging.info('subsample: ' + ' '.join([str(x) for x in subsample]))
         self.subsample = subsample
 
         # label smoothing info
         if args.lsm_type and os.path.isfile(args.train_json):
             logging.info("Use label smoothing with " + args.lsm_type)
-            labeldist = label_smoothing_dist(trg_vocab_size, args.lsm_type, transcript=args.train_json)
+            labeldist = label_smoothing_dist(odim, args.lsm_type, transcript=args.train_json)
         else:
             labeldist = None
 
         # speech translation related
-        self.replace_sos = args.replace_sos
+        self.replace_sos = args.replace_sos   #replace
+
 
         self.frontend = None
-
+        self.prenet = PreNet(idim, 2, args.eunits // 2, args.dropout_rate)
+        self.ctc = ctc_for(args, odim)
         # encoder
-        self.senc = Encoder(args.senctype, idim, args.senclayers, args.eunits, args.eprojs, subsample, args.dropout_rate)
-        self.tenc = Encoder(args.tenctype, args.eunits, args.tenclayers, args.eunits, args.eprojs, None, args.dropout_rate)
-
+        self.embed_src = torch.nn.Embedding(odim, args.eunits, padding_idx=self.eos, _weight=self.ctc.ctc_lo.weight)
+        self.dropemb = torch.nn.Dropout(p=args.dropout_rate)
+        self.enc = Encoder('blstm', args.eunits, args.elayers - 1, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
         # attention
-        self.srcatt = att_for(args)
-        self.trgatt = att_for(args, 2)
+        self.att = att_for(args)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
-                                args.verbose,
-                                args.char_list, labeldist,
-                                args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
-                                args.context_residual, args.replace_sos)
-        if args.share_dict:
-            embed = self.srcdec.embed
-        else:
-            embed = None
-        self.trgdec = Decoder(args.eprojs, trg_vocab_size, args.dtype, args.trgdlayers, args.dunits, self.sos, self.eos, self.trgatt,
-                               args.verbose,
-                                args.char_list, labeldist,
-                                args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
-                                args.context_residual, args.replace_sos, embed=embed)
-        self.embed = self.srcdec.embed
-        self.dropout_emb = self.srcdec.dropout_emb
+        self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
 
         # weight initialization
         self.init_like_chainer()
+
+        # pre-training w/ ASR encoder and NMT decoder
         if asr_model is not None:
             param_dict = dict(asr_model.named_parameters())
             for n, p in self.named_parameters():
-                asr_n = n.lstrip('s')
-                if 'senc.enc' in n and asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    p.data = param_dict[asr_n].data
-                    logging.warning('Overwrite %s' % n)
-                asr_n = n.lstrip('src')
-                if asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    if 'srcdec' in n or 'srcatt' in n:
-                        p.data = param_dict[asr_n].data
+                # overwrite the encoder
+                if n in param_dict.keys() and p.size() == param_dict[n].size():
+                    if 'enc.enc' in n:
+                        p.data = param_dict[n].data
                         logging.warning('Overwrite %s' % n)
-           
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
-                mt_enc_n = n.lstrip('t')
-                if 'tenc.enc' in n and mt_enc_n in param_dict.keys() and p.size() == param_dict[mt_enc_n].size():
-                    p.data = param_dict[mt_enc_n].data
-                    logging.warning('Overwrite %s' % n)
-                mt_dec_n = n.lstrip('trg')
-                if mt_dec_n in param_dict.keys() and p.size() == param_dict[mt_dec_n].size():
-                    if 'trgdec' in n or 'trgatt.0' in n:
-                        p.data = param_dict[mt_dec_n].data
+                # overwrite the decoder
+                if n in param_dict.keys() and p.size() == param_dict[n].size():
+                    if 'dec.' in n or 'att' in n:
+                        p.data = param_dict[n].data
                         logging.warning('Overwrite %s' % n)
-        if st_model is not None:
-            param_dict = dict(st_model.named_parameters())
-            for n, p in self.named_parameters():
-                st_n = n.lstrip('s')
-                if 'senc.enc' in n and st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
-                    p.data = param_dict[st_n].data
-                    logging.warning('Overwrite %s' % n)
-                st_n = n.lstrip('trg')
-                if st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
-                    if 'trgdec' in n:
-                        p.data = param_dict[st_n].data
-                        logging.warning('Overwrite %s' % n)
-                st_n = n.replace('trgatt.1', 'att.0')
-                if st_n in param_dict.keys() and p.size() == param_dict[st_n].size():
-                    p.data = param_dict[st_n].data
-                    logging.warning('Overwrite %s' % n)
+
 
         # options for beam search
+        if 'report_cer' in vars(args) and (args.report_cer or args.report_wer):
+            recog_args = {'beam_size': args.beam_size, 'penalty': args.penalty,
+                          'ctc_weight': args.ctc_weight, 'maxlenratio': args.maxlenratio,
+                          'minlenratio': args.minlenratio, 'lm_weight': args.lm_weight,
+                          'rnnlm': args.rnnlm, 'nbest': args.nbest,
+                          'space': args.sym_space, 'blank': args.sym_blank,
+                          'tgt_lang': False}
+
+            self.recog_args = argparse.Namespace(**recog_args)
+            self.report_cer = args.report_cer
+            self.report_wer = args.report_wer
+        else:
+            self.report_cer = False
+            self.report_wer = False
         self.rnnlm = None
 
         self.logzero = -10000000000.0
@@ -175,6 +152,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.asrloss = None
         self.stacc = None
         self.asracc = None
+        self.ctcloss = None
         self.ppl = None
 
     def init_like_chainer(self):
@@ -217,14 +195,11 @@ class E2E(ASRInterface, torch.nn.Module):
         lecun_normal_init_parameters(self)
         # exceptions
         # embed weight ~ Normal(0, 1)
-        self.srcdec.embed.weight.data.normal_(0, 1)
-        self.trgdec.embed.weight.data.normal_(0, 1)
+        self.dec.embed.weight.data.normal_(0, 1)
         # forget-bias = 1.0
         # https://discuss.pytorch.org/t/set-forget-gate-bias-of-lstm/1745
-        for l in six.moves.range(len(self.srcdec.decoder)):
-            set_forget_bias_to_one(self.srcdec.decoder[l].bias_ih)
-        for l in six.moves.range(len(self.trgdec.decoder)):
-            set_forget_bias_to_one(self.trgdec.decoder[l].bias_ih)
+        for l in six.moves.range(len(self.dec.decoder)):
+            set_forget_bias_to_one(self.dec.decoder[l].bias_ih)
 
     def forward(self, xs_pad, ilens, ys_pad, task="st"):
         """E2E forward
@@ -235,15 +210,12 @@ class E2E(ASRInterface, torch.nn.Module):
         :return: loass value
         :rtype: torch.Tensor
         """
-        # 0. Frontend
+        # 0. prenet
         if task == "st" or task == "asr":
-            if self.frontend is not None:
-                hs_pad, hlens, mask = self.frontend(to_torch_tensor(xs_pad), ilens)
-                hs_pad, hlens = self.feature_transform(hs_pad, hlens)
-            else:
-                hs_pad, hlens = xs_pad, ilens
+            hs_pad, hlens, _ = self.prenet(xs_pad, ilens)
         else:
-            hs_pad, hlens = self.dropout_emb(self.embed(xs_pad)), ilens
+            hs_pad = self.dropemb(self.embed_src(xs_pad))
+            hlens = ilens
 
         # 1. Encoder
         if self.replace_sos:
@@ -252,28 +224,57 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             tgt_lang_ids = None
 
-        if task == "st" or task == "asr":
-            hs_pad, hlens, _ = self.senc(hs_pad, hlens)
-        else:
-            hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
-
-
-        # 3. attention loss
         if task == "asr":
-            loss, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-            self.asracc = acc
-            self.asrloss = float(loss)
-        elif task == "st":
-            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 1, tgt_lang_ids=tgt_lang_ids)
-            self.stacc = acc
-            self.stloss = float(loss)
+            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
         else:
-            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 0, tgt_lang_ids=tgt_lang_ids)
-            self.ppl = float(ppl)
+            loss_ctc = None
+
+        cs_pad, clens, _ = self.enc(hs_pad, hlens)
+
+
+        loss_att, acc, ppl = self.dec(cs_pad, clens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+
+        # 4. compute cer without beam search
+        if task == "asr":
+            cers = []
+
+            y_hats = self.ctc.argmax(hs_pad).data
+            for i, y in enumerate(y_hats):
+                y_hat = [x[0] for x in groupby(y)]
+                y_true = ys_pad[i]
+
+                seq_hat = [self.char_list[int(idx)] for idx in y_hat if int(idx) != -1]
+                seq_true = [self.char_list[int(idx)] for idx in y_true if int(idx) != -1]
+                seq_hat_text = "".join(seq_hat).replace(self.space, ' ')
+                seq_hat_text = seq_hat_text.replace(self.blank, '')
+                seq_true_text = "".join(seq_true).replace(self.space, ' ')
+
+                hyp_chars = seq_hat_text.replace(' ', '')
+                ref_chars = seq_true_text.replace(' ', '')
+                if len(ref_chars) > 0:
+                    cers.append(editdistance.eval(hyp_chars, ref_chars) / len(ref_chars))
+
+            cer_ctc = sum(cers) / len(cers) if cers else None
+        else:
+            cer_ctc = 0
+
+
+        alpha = self.mtlalpha
+        if task == "st":
+            self.stloss = float(loss_att)
+            self.stacc = acc
+            loss = loss_att
+        elif task == "mt" or task == "mt":
+            self.ppl = ppl
+            loss = loss_att
+        else:
+            loss = alpha * loss_ctc + (1 - alpha) * loss_att
+            self.asrloss = float(loss)
+            self.ctcloss = float(loss_ctc)
 
         loss_data = float(loss)
-        if not math.isnan(loss_data):
-            self.reporter.report(self.stloss, self.stacc, self.asrloss, self.asracc, self.ppl)
+        if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
+            self.reporter.report(self.stloss, self.stacc, self.asrloss, self.ctcloss, cer_ctc, self.asracc, self.ppl)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return loss
@@ -306,7 +307,7 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
-        hs, _, _ = self.senc(hs, hlens)
+        hs, _, _ = self.enc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
@@ -316,7 +317,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y = self.dec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm)
 
         if prev:
             self.train()
@@ -350,7 +351,7 @@ class E2E(ASRInterface, torch.nn.Module):
             hs_pad, hlens = xs_pad, ilens
 
         # 1. Encoder
-        hs_pad, hlens, _ = self.senc(hs_pad, hlens)
+        hs_pad, hlens, _ = self.enc(hs_pad, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
@@ -360,7 +361,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         hlens = torch.tensor(list(map(int, hlens)))  # make sure hlens is tensor
-        y = self.trgdec.recognize_beam_batch(hs_pad, hlens, lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y = self.dec.recognize_beam_batch(hs_pad, hlens, lpz, recog_args, char_list, rnnlm)
 
         if prev:
             self.train()
@@ -412,10 +413,10 @@ class E2E(ASRInterface, torch.nn.Module):
                 ys_pad = ys_pad[:, 1:]  # remove target language ID in the beggining
             else:
                 tgt_lang_ids = None
-            hpad, hlens, _ = self.senc(hs_pad, hlens)
+            hpad, hlens, _ = self.enc(hs_pad, hlens)
 
             # 2. Decoder
-            att_ws = self.trgdec.calculate_all_attentions(hpad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            att_ws = self.dec.calculate_all_attentions(hpad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
 
         return att_ws
 
