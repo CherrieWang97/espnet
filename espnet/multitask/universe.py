@@ -243,7 +243,7 @@ class ASRUpdater(training.StandardUpdater):
 
         # Get the next batch ( a list of json files
         batch = asr_iter.next()
-        if task == "asr":
+        if self.task == "asr":
             x = self.converter(batch, self.device, self.src_id)
         else:
             x = self.converter(batch, self.device, self.trg_id)
@@ -412,8 +412,9 @@ def train(args):
     mt_converter = MTConverter(args.trg_id)
 
     # read json data
-    with open(args.train_json, 'rb') as f:
-        train_json = json.load(f)['utts']
+    if args.train_json:
+        with open(args.train_json, 'rb') as f:
+            train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
     with open(args.asr_json, 'rb') as f:
