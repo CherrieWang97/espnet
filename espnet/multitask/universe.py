@@ -171,11 +171,12 @@ class CustomEvaluator(extensions.Evaluator):
     :param torch.device device : The device used
     """
 
-    def __init__(self, model, iterator, target, converter, device):
+    def __init__(self, model, iterator, target, converter, device, task="st"):
         super(CustomEvaluator, self).__init__(iterator, target)
         self.model = model
         self.converter = converter
         self.device = device
+        self.task = task
 
     # The core part of the update routine can be customized by overriding
     def evaluate(self):
@@ -201,11 +202,64 @@ class CustomEvaluator(extensions.Evaluator):
                     # x: original json with loaded features
                     #    will be converted to chainer variable later
                     x = self.converter(batch, self.device)
-                    self.model(*x)
+                    self.model(*x, task=self.task)
                 summary.add(observation)
         self.model.train()
 
         return summary.compute_mean()
+
+class ASRUpdater(training.StandardUpdater):
+    """Custom Updater for Pytorch
+
+    :param torch.nn.Module model : The model to update
+    :param int grad_clip_threshold : The gradient clipping value to use
+    :param chainer.dataset.Iterator train_iter : The training iterator
+    :param torch.optim.optimizer optimizer: The training optimizer
+    :param CustomConverter converter: The batch converter
+    :param torch.device device : The device to use
+    :param int ngpu : The number of gpus to use
+    """
+
+    def __init__(self, model, grad_clip_threshold, train_iter,
+                 optimizer, converter, device, ngpu, src_id, trg_id, task="st"):
+        super(ASRUpdater, self).__init__(train_iter, optimizer)
+        self.model = model
+        self.grad_clip_threshold = grad_clip_threshold
+        self.converter = converter
+        self.device = device
+        self.ngpu = ngpu
+        self.forward_count = 0
+        self.iteration = 0
+        self.src_id = src_id
+        self.trg_id = trg_id
+        self.task = task
+
+    # The core part of the update routine can be customized by overriding.
+    def update_core(self):
+        # When we pass one iterator and optimizer to StandardUpdater.__init__,
+        # they are automatically named 'main'.
+        asr_iter = self.get_iterator('main')
+        optimizer = self.get_optimizer('main')
+
+        # Get the next batch ( a list of json files
+        batch = asr_iter.next()
+        if task == "asr":
+            x = self.converter(batch, self.device, self.src_id)
+        else:
+            x = self.converter(batch, self.device, self.trg_id)
+        loss = self.model(*x, task=self.task).mean()
+        loss.backward()
+        self.iteration += 1
+
+        # compute the gradient norm to check if it is normal or not
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), self.grad_clip_threshold)
+        logging.info('grad norm={}'.format(grad_norm))
+        if math.isnan(grad_norm):
+            logging.warning('grad norm is nan. Do not update model.')
+        else:
+            optimizer.step()
+        optimizer.zero_grad()
 
 
 class CustomUpdater(training.StandardUpdater):
@@ -367,7 +421,8 @@ def train(args):
 
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
-    train = make_batchset(train_json, args.batch_size,
+    if args.train_json:
+        train = make_batchset(train_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           shortest_first=use_sortagrad,
@@ -376,6 +431,8 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    else:
+        train = None
     valid = make_batchset(valid_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -384,7 +441,8 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
-    asr_train = make_batchset(asr_json, args.batch_size,
+    if args.asr_json:
+        asr_train = make_batchset(asr_json, args.batch_size,
                               args.maxlen_in, args.maxlen_out, args.minibatches,
                               min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                               shortest_first=use_sortagrad,
@@ -394,8 +452,12 @@ def train(args):
                               batch_frames_out=args.batch_frames_out,
                               batch_frames_inout=args.batch_frames_inout
                               )
-    mt_train = make_mtbatchset(args.train_src, args.train_trg, args.mt_batch_size)
-
+    else:
+        asr_train = None
+    if args.train_src and args.train_trg:
+        mt_train = make_mtbatchset(args.train_src, args.train_trg, args.mt_batch_size)
+    else:
+        mt_train = None
 
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
@@ -408,24 +470,46 @@ def train(args):
 
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
-    train_iter = ToggleableShufflingSerialIterator(
-        TransformDataset(train, load_tr),
-        batch_size=1, shuffle=not use_sortagrad)
+    if train:
+        train_iter = ToggleableShufflingSerialIterator(
+            TransformDataset(train, load_tr),
+            batch_size=1, shuffle=not use_sortagrad)
+    else:
+        train_iter = None
     valid_iter = ToggleableShufflingSerialIterator(
         TransformDataset(valid, load_cv),
         batch_size=1, repeat=False, shuffle=False)
-    asr_iter = ToggleableShufflingSerialIterator(
-        TransformDataset(asr_train, load_tr),
-        batch_size=1, shuffle=not use_sortagrad)
-    mt_iter = ToggleableShufflingSerialIterator(
-            TransformDataset(mt_train, mt_converter.transform),
+    if asr_train:
+        asr_iter = ToggleableShufflingSerialIterator(
+            TransformDataset(asr_train, load_tr),
             batch_size=1, shuffle=not use_sortagrad)
-    iters = {"main": train_iter,
-             "asr": asr_iter,
-             "mt": mt_iter}
+    else:
+        asr_iter = None
+    if mt_train:
+        mt_iter = ToggleableShufflingSerialIterator(
+                TransformDataset(mt_train, mt_converter.transform),
+                batch_size=1, shuffle=not use_sortagrad)
+    else:
+        mt_iter = None
+    if train_iter and asr_iter and mt_iter:
+        iters = {"main": train_iter,
+                 "asr": asr_iter,
+                 "mt": mt_iter}
+    elif train_iter:
+        iters = {"main": train_iter}
+    elif asr_iter:
+        iters = {"main": asr_iter}
+        
     # Set up a trainer
-    updater = CustomUpdater(
-        model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)
+    if train_iter and asr_iter and mt_iter: 
+        updater = CustomUpdater(
+            model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)
+    elif train_iter:
+        updater = ASRUpdater(
+            model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="st")
+    else:
+        updater = ASRUpdater(
+            model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="asr")
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -439,8 +523,10 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
-
+    if train_iter:
+        trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task="st"))
+    else:
+        trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task="asr"))
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/stloss', 'validation/main/stloss'],
                                          'epoch', file_name='stloss.png'))
