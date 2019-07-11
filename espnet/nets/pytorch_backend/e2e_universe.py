@@ -224,7 +224,7 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             tgt_lang_ids = None
 
-        if task == "asr":
+        if task == "asr" and args.mtlalpha > 0:
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
         else:
             loss_ctc = None
