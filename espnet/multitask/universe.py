@@ -417,8 +417,9 @@ def train(args):
             train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
-    with open(args.asr_json, 'rb') as f:
-        asr_json = json.load(f)['utts']
+    if args.asr_json:
+        with open(args.asr_json, 'rb') as f:
+            asr_json = json.load(f)['utts']
 
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
@@ -500,7 +501,6 @@ def train(args):
         iters = {"main": train_iter}
     elif asr_iter:
         iters = {"main": asr_iter}
-        
     # Set up a trainer
     if train_iter and asr_iter and mt_iter: 
         updater = CustomUpdater(

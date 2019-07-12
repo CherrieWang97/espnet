@@ -65,7 +65,7 @@ dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=universe_pretrain
+expname=universe_st
 
 expdir=//teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
@@ -87,7 +87,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --verbose ${verbose} \
         --resume ${resume} \
         --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_share.json \
-        --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_share.json 
+        --train-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/train/data_share.json 
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
