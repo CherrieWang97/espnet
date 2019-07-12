@@ -5,7 +5,7 @@
 
 
 from __future__ import division
-
+import pdb
 import argparse
 import logging
 import math
@@ -62,7 +62,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
     """
 
-    def __init__(self, idim, odim, args, asr_model=None, mt_model=None):
+    def __init__(self, idim, odim, args, asr_model=None, mt_model=None, st_model=None):
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
         self.mtlalpha = args.mtlalpha
@@ -98,11 +98,12 @@ class E2E(ASRInterface, torch.nn.Module):
 
         self.frontend = None
         self.prenet = PreNet(idim, 3, args.eunits, args.dropout_rate)
+        self.dropout_pre = torch.nn.Dropout(p=args.dropout_rate)
         self.ctc = ctc_for(args, odim)
         # encoder
         self.embed_src = torch.nn.Embedding(odim, args.eunits, padding_idx=self.eos, _weight=self.ctc.ctc_lo.weight)
         self.dropemb = torch.nn.Dropout(p=args.dropout_rate)
-        self.enc = Encoder('blstm', args.eunits, 2, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
+        self.enc = Encoder('blstm', args.eunits*2, args.elayers - 1, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
         # attention
         self.att = att_for(args)
         # decoder
@@ -128,8 +129,30 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'dec.' in n or 'att' in n:
                         p.data = param_dict[n].data
                         logging.warning('Overwrite %s' % n)
-
-
+        if st_model is not None:
+            param_dict = dict(st_model.named_parameters())
+            for n, p in self.named_parameters():
+                enc_n = n.replace('prenet', 'enc')
+                if enc_n in param_dict.keys() and p.size() == param_dict[enc_n].size():
+                    p.data = param_dict[enc_n].data
+                    logging.warning('Overwrite %s' % n)
+                enc_n = n.replace('enc.0', 'enc.1')
+                enc_n = enc_n.replace('l3', 'l4')
+                enc_n = enc_n.replace('l2', 'l3')
+                enc_n = enc_n.replace('l1', 'l2')
+                enc_n = enc_n.replace('l0', 'l1')
+                if 'enc.enc' in enc_n and enc_n in param_dict.keys() and p.size() == param_dict[enc_n].size():
+                    p.data = param_dict[enc_n].data
+                    logging.warning('Overwrite %s' % n)
+            self.dec.embed.weight[:10000, :] = st_model.dec.embed.weight
+            self.dec.embed.weight[10000, :] = st_model.dec.embed.weight[1, :]
+            self.dec.embed.weight[10001, :] = st_model.dec.embed.weight[1, :]
+            self.dec.output.weight[:10000, :] = st_model.dec.output.weight
+            self.dec.output.weight[10000, :] = st_model.dec.output.weight[1, :]
+            self.dec.output.weight[10001, :] = st_model.dec.output.weight[1, :]
+            self.dec.output.bias[:10000] = st_model.dec.output.bias
+            self.dec.output.bias[10000] = st_model.dec.output.bias[1]
+            self.dec.output.bias[10001] = st_model.dec.output.bias[1]
         # options for beam search
         if 'report_cer' in vars(args) and (args.report_cer or args.report_wer):
             recog_args = {'beam_size': args.beam_size, 'penalty': args.penalty,
@@ -213,6 +236,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # 0. prenet
         if task == "st" or task == "asr":
             hs_pad, hlens, _ = self.prenet(xs_pad, ilens)
+            hs_pad = self.dropout_pre(hs_pad)
         else:
             hs_pad = self.dropemb(self.embed_src(xs_pad))
             hlens = ilens
@@ -308,6 +332,8 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
+        hs, hlens, _ = self.prenet(hs, hlens)
+        hs = self.dropout_pre(hs)
         hs, _, _ = self.enc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores

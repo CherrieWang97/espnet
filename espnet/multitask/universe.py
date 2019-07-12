@@ -71,7 +71,7 @@ class ASRConverter(object):
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
 
-    def __call__(self, batch, device, lang_id=10000):
+    def __call__(self, batch, device, lang_id=10001):
         """Transforms a batch and send it to a device
 
         :param list batch: The batch to transform
@@ -595,13 +595,13 @@ def recog(args):
     :param Namespace args: The program arguments
     """
     set_deterministic_pytorch(args)
-    idim, src_vocab, trg_vocab, train_args = get_model_conf(args.model, os.path.join(os.path.dirname(args.model), 'model.json'))
+    idim, vocab_size, train_args = get_model_conf(args.model, os.path.join(os.path.dirname(args.model), 'model.json'))
     logging.info('reading model parameters from ' + args.model)
     if args.st_model:
         st_model, _ = load_trained_model(args.st_model)
         assert isinstance(st_model, ASRInterface)
   
-    model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model)
+    model = E2E(idim, vocab_size, train_args, st_model=st_model)
     #torch_load(args.model, model)
     if args.st_model:
         del st_model
