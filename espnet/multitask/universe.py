@@ -435,7 +435,7 @@ def train(args):
                           batch_frames_inout=args.batch_frames_inout)
     else:
         train = None
-    valid = make_batchset(valid_json, args.batch_size,
+    valid = make_batchset(valid_json, args.batch_size * 2,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           count=args.batch_count,
