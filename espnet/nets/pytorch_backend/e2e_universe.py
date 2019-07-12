@@ -224,7 +224,7 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             tgt_lang_ids = None
 
-        if task == "asr":
+        if task == "asr" and self.mtlalpha > 0:
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
         else:
             loss_ctc = None
@@ -271,6 +271,7 @@ class E2E(ASRInterface, torch.nn.Module):
             loss = alpha * loss_ctc + (1 - alpha) * loss_att
             self.asrloss = float(loss)
             self.ctcloss = float(loss_ctc)
+            self.asracc = acc
 
         loss_data = float(loss)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
