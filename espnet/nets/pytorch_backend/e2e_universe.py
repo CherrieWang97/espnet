@@ -99,7 +99,6 @@ class E2E(ASRInterface, torch.nn.Module):
         self.frontend = None
         self.prenet = PreNet(idim, 2, args.eunits, args.dropout_rate)
         self.dropout_pre = torch.nn.Dropout(p=args.dropout_rate)
-        self.linear_pre = torch.nn.Linear(args.eunits*2, args.eunits)
         self.ctc = ctc_for(args, odim)
         # encoder
         self.embed_src = torch.nn.Embedding(odim, args.eunits, padding_idx=self.eos, _weight=self.ctc.ctc_lo.weight)
@@ -237,8 +236,6 @@ class E2E(ASRInterface, torch.nn.Module):
         # 0. prenet
         if task == "st" or task == "asr":
             hs_pad, hlens, _ = self.prenet(xs_pad, ilens)
-            hs_pad = self.dropout_pre(hs_pad)
-            hs_pad = self.linear_pre(hs_pad)
             hs_pad = self.dropout_pre(hs_pad)
         else:
             hs_pad = self.dropemb(self.embed_src(xs_pad))
