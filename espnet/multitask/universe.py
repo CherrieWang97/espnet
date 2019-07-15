@@ -527,7 +527,7 @@ def train(args):
         lossname = "asrloss"
         accname = "asracc"
 
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(10, 'iteration'))
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(5000, 'iteration'))
 
     trainer.extend(extensions.PlotReport(['main/' + lossname, 'validation/main/'+lossname],
                                          'iteration', file_name=lossname+'.png'), trigger=(5000, 'iteration'))
@@ -557,7 +557,7 @@ def train(args):
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/' + accname,
+                               'validation/main/' + lossname,
                                lambda best_value, current_value: best_value < current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
@@ -567,7 +567,7 @@ def train(args):
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/stloss', 'main/stacc','validation/main/'+lossname, 
-                     'validation/main/'+lossname, 'main/asrloss', 'main/asracc', 'main/ctcloss',
+                     'validation/main/'+accname, 'main/asrloss', 'main/asracc', 'main/ctcloss',
                       'main/ppl',
                    'elapsed_time']
     if args.opt == 'adadelta':

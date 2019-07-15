@@ -117,9 +117,8 @@ class E2E(ASRInterface, torch.nn.Module):
             for n, p in self.named_parameters():
                 # overwrite the encoder
                 if n in param_dict.keys() and p.size() == param_dict[n].size():
-                    if 'enc.enc' in n:
-                        p.data = param_dict[n].data
-                        logging.warning('Overwrite %s' % n)
+                    p.data = param_dict[n].data
+                    logging.warning('Overwrite %s' % n)
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
