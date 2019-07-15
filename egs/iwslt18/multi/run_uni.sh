@@ -108,21 +108,21 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p exp/${decode_dir}
         mkdir -p ${expdir}/${decode_dir}
 
-        #${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-        #    universe_recog.py \
-        #    --config ${decode_config} \
-        #    --ngpu ${ngpu} \
-        #    --backend ${backend} \
-        #    --batchsize 0 \
-        #    --recog-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/tst2013.de/deltafalse/split${nj}utt/data.JOB.json \
-        #    --result-label ${expdir}/${decode_dir}/data.JOB.json \
-        #    --model ${expdir}/results/${recog_model} \
+        ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
+            universe_recog.py \
+            --config ${decode_config} \
+            --ngpu ${ngpu} \
+            --backend ${backend} \
+            --batchsize 0 \
+            --recog-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/tst2013.de/deltafalse/split${nj}utt/data.JOB.json \
+            --result-label ${expdir}/${decode_dir}/data.JOB.json \
+            --model ${expdir}/results/${recog_model}
 
         if [ ${rtask} = "dev.de" ] || [ ${rtask} = "test.de" ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}
         else
             set=$(echo ${rtask} | cut -f -1 -d ".")
-            local/score_bleu_reseg.sh --bpemodel /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.model /teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/universe_debug_drop/decode_tst2013.de ${dict} ${st_ted} ${set}
+            local/score_bleu_reseg.sh --bpemodel /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.model ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
         fi
     ) &
     pids+=($!) # store background pids

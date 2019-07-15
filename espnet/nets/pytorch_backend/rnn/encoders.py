@@ -261,7 +261,6 @@ class PreNet(torch.nn.Module):
         current_states = []
         for module, prev_state in zip(self.enc, prev_states):
             xs_pad, ilens, states = module(xs_pad, ilens, prev_state=prev_state)
-            xs_pad = self.dropout_layer(xs_pad)
             current_states.append(states)
 
         # make mask to remove bias value in padded part
