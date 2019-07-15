@@ -248,7 +248,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "asr" and self.mtlalpha > 0:
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
         else:
-            loss_ctc = None
+            loss_ctc = 0
 
         cs_pad, clens, _ = self.enc(hs_pad, hlens)
 
