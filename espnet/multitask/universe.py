@@ -201,7 +201,11 @@ class CustomEvaluator(extensions.Evaluator):
                     # read scp files
                     # x: original json with loaded features
                     #    will be converted to chainer variable later
-                    x = self.converter(batch, self.device)
+                    if self.task == "st":
+                        lang_id = 10001
+                    else:
+                        lang_id = 10000
+                    x = self.converter(batch, self.device, lang_id)
                     self.model(*x, task=self.task)
                 summary.add(observation)
         self.model.train()
@@ -423,7 +427,16 @@ def train(args):
 
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
-    if args.train_json:
+    load_tr = LoadInputsAndTargets(
+        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
+        preprocess_args={'train': True}  # Switch the mode of preprocessing
+    )
+    load_cv = LoadInputsAndTargets(
+        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
+        preprocess_args={'train': False}  # Switch the mode of preprocessing
+    )
+
+    if args.task == "st" or args.task =="mtl":
         train = make_batchset(train_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -433,17 +446,10 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
-    else:
-        train = None
-    valid = make_batchset(valid_json, args.batch_size * 2,
-                          args.maxlen_in, args.maxlen_out, args.minibatches,
-                          min_batch_size=args.ngpu if args.ngpu > 1 else 1,
-                          count=args.batch_count,
-                          batch_bins=args.batch_bins,
-                          batch_frames_in=args.batch_frames_in,
-                          batch_frames_out=args.batch_frames_out,
-                          batch_frames_inout=args.batch_frames_inout)
-    if args.asr_json:
+        train_iter = ToggleableShufflingSerialIterator(
+            TransformDataset(train, load_tr),
+            batch_size=1, shuffle=not use_sortagrad)
+    if args.task == "asr" or args.task == "mtl":
         asr_train = make_batchset(asr_json, args.batch_size,
                               args.maxlen_in, args.maxlen_out, args.minibatches,
                               min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -454,63 +460,47 @@ def train(args):
                               batch_frames_out=args.batch_frames_out,
                               batch_frames_inout=args.batch_frames_inout
                               )
-    else:
-        asr_train = None
-    if args.train_src and args.train_trg:
-        mt_train = make_mtbatchset(args.train_src, args.train_trg, args.mt_batch_size)
-    else:
-        mt_train = None
-
-    load_tr = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
-        preprocess_args={'train': True}  # Switch the mode of preprocessing
-    )
-    load_cv = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
-        preprocess_args={'train': False}  # Switch the mode of preprocessing
-    )
-
-    # hack to make batchsize argument as 1
-    # actual bathsize is included in a list
-    if train:
-        train_iter = ToggleableShufflingSerialIterator(
-            TransformDataset(train, load_tr),
-            batch_size=1, shuffle=not use_sortagrad)
-    else:
-        train_iter = None
-    valid_iter = ToggleableShufflingSerialIterator(
-        TransformDataset(valid, load_cv),
-        batch_size=1, repeat=False, shuffle=False)
-    if asr_train:
         asr_iter = ToggleableShufflingSerialIterator(
             TransformDataset(asr_train, load_tr),
             batch_size=1, shuffle=not use_sortagrad)
-    else:
-        asr_iter = None
-    if mt_train:
+    if args.task == "mt" or args.task == "mtl":
+        mt_train = make_mtbatchset(args.train_src, args.train_trg, args.mt_batch_size)
         mt_iter = ToggleableShufflingSerialIterator(
                 TransformDataset(mt_train, mt_converter.transform),
                 batch_size=1, shuffle=not use_sortagrad)
-    else:
-        mt_iter = None
-    if train_iter and asr_iter and mt_iter:
+
+    valid = make_batchset(valid_json, args.batch_size * 2,
+                          args.maxlen_in, args.maxlen_out, args.minibatches,
+                          min_batch_size=args.ngpu if args.ngpu > 1 else 1,
+                          count=args.batch_count,
+                          batch_bins=args.batch_bins,
+                          batch_frames_in=args.batch_frames_in,
+                          batch_frames_out=args.batch_frames_out,
+                          batch_frames_inout=args.batch_frames_inout)
+
+    # hack to make batchsize argument as 1
+    # actual bathsize is included in a list
+    valid_iter = ToggleableShufflingSerialIterator(
+        TransformDataset(valid, load_cv),
+        batch_size=1, repeat=False, shuffle=False)
+    iters = {} 
+    if args.task == "mtl":
         iters = {"main": train_iter,
                  "asr": asr_iter,
                  "mt": mt_iter}
-    elif train_iter:
-        iters = {"main": train_iter}
-    elif asr_iter:
-        iters = {"main": asr_iter}
-    # Set up a trainer
-    if train_iter and asr_iter and mt_iter: 
         updater = CustomUpdater(
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)
-    elif train_iter:
+    elif args.task == ":st":
+        iters = {"main": train_iter}
         updater = ASRUpdater(
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="st")
-    else:
+    elif args.task == "asr":
+        iters = {"main": asr_iter}
         updater = ASRUpdater(
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="asr")
+    elif args.task == "mt":
+        iters = {"main": mt_iter}
+    # Set up a trainer
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -524,23 +514,25 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    if train_iter:
-        trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task="st"))
-    else:
-        trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task="asr"))
-    # Make a plot for training and validation values
-    trainer.extend(extensions.PlotReport(['main/stloss', 'validation/main/stloss'],
-                                         'epoch', file_name='stloss.png'))
-    trainer.extend(extensions.PlotReport(['main/stacc', 'validation/main/stacc'],
-                                         'epoch', file_name='stacc.png'))
+    if args.task == "mtl" or args.task == "st":
+        lossname = "stloss"
+        accname = "stacc"
+    elif args.task == "asr":
+        lossname = "asrloss"
+        accname = "asracc"
 
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(5000, 'iteration'))
 
-    # Save best models
+    trainer.extend(extensions.PlotReport(['main/' + lossname, 'validation/main/'+lossname],
+                                         'iteration', file_name=lossname+'.png'), trigger=(5000, 'iteration'))
+    trainer.extend(extensions.PlotReport(['main/' + accname, 'validation/main/' + accname],
+                                         'iteration', file_name=accname + '.png'), trigger=(5000, 'iteration'))
     trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/stloss'))
+                   trigger=training.triggers.MinValueTrigger('validation/main/' + lossname))
 
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/stacc'))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/' + accname))
+        
 
     # save snapshot which contains model and optimizer states
     trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
@@ -550,20 +542,20 @@ def train(args):
         if args.criterion == 'acc':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/stacc',
+                               'validation/main/' + accname,
                                lambda best_value, current_value: best_value > current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/stacc',
+                               'validation/main/' + accname,
                                lambda best_value, current_value: best_value > current_value))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
-                               'validation/main/stloss',
+                               'validation/main/' + accname,
                                lambda best_value, current_value: best_value < current_value))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
-                               'validation/main/stloss',
+                               'validation/main/' + lossname,
                                lambda best_value, current_value: best_value < current_value))
 
     # Write a log of evaluation statistics for each epoch
