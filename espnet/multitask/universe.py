@@ -600,9 +600,11 @@ def recog(args):
     if args.st_model:
         st_model, _ = load_trained_model(args.st_model)
         assert isinstance(st_model, ASRInterface)
+    else:
+        st_model = None
   
     model = E2E(idim, vocab_size, train_args, st_model=st_model)
-    #torch_load(args.model, model)
+    torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)

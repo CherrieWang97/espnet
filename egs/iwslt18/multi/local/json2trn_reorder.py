@@ -34,8 +34,6 @@ if __name__ == '__main__':
     with codecs.open(args.dict, 'r', encoding="utf-8") as f:
         dictionary = f.readlines()
     char_list = [entry.split(' ')[0] for entry in dictionary]
-    char_list.insert(0, '<blank>')
-    char_list.append('<eos>')
 
     logging.info("writing hyp trn to %s", args.hyp)
     h = codecs.open(args.hyp, 'w', encoding="utf-8")
@@ -52,5 +50,5 @@ if __name__ == '__main__':
 
     for talkid in file_order:
         for start_time, (x, seq) in sorted(hyps[talkid].items(), key=lambda x: x[0]):
-            h.write(" ".join(seq).replace('<eos>', '')),
+            h.write(" ".join(seq).replace('</s>', '')),
             h.write(" (" + j['utts'][x]['utt2spk'].replace('-', '_') + "-" + x + ")\n")

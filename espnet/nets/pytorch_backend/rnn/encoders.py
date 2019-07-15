@@ -241,7 +241,7 @@ class PreNet(torch.nn.Module):
     def __init__(self, idim, elayers, eunits, dropout, in_channel=1):
         super(PreNet, self).__init__()
         self.enc = torch.nn.ModuleList([VGG2L(in_channel),
-                                        RNNPre(get_vgg2l_odim(idim, in_channel=in_channel), 2, eunits, dropout),
+                                        RNNPre(get_vgg2l_odim(idim, in_channel=in_channel), 1, eunits, dropout),
                                         RNNPre(eunits * 2, 2, eunits // 2, dropout)])
         self.dropout_layer = torch.nn.Dropout(p=dropout)
 

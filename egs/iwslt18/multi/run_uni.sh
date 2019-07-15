@@ -28,7 +28,7 @@ recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.bes
 # pre-training related
 asr_model= #/hdfs/resrchvc/v-chengw/iwslt18/exp4asr/asr_vgg_500/results/model.acc.best
 mt_model= #/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/model.acc.best
-
+st_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/st_share/model.acc.best
 # preprocessing related
 case=lc
 # tc: truecase
@@ -38,8 +38,8 @@ case=lc
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-st_ted=/hdfs/resrchvc/v-chengw/iwslt18/data
-dumpdir=/hdfs/resrchvc/v-chengw/iwslt18/data4st/dump    # directory to dump full features
+st_ted=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data 
+dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st    # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -65,9 +65,9 @@ dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=universe_st
+expname=setting4
 
-expdir=//teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
+expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
 mkdir -p exp
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
@@ -98,7 +98,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     for rtask in ${recog_set}; do
     (
         decode_dir=decode_${rtask}
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
+        feat_recog_dir=${dumpdir}/${rtask}/deltafalse
 
         # split data
         #splitjson.py --parts ${nj} ${feat_recog_dir}/data.${case}.json
@@ -108,21 +108,21 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p exp/${decode_dir}
         mkdir -p ${expdir}/${decode_dir}
 
-        ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
-            --config ${decode_config} \
-            --ngpu ${ngpu} \
-            --backend ${backend} \
-            --batchsize 0 \
-            --recog-json ${feat_recog_dir}/split${nj}utt/data.JOB.json \
-            --result-label ${expdir}/${decode_dir}/data.JOB.json \
-            --model ${expdir}/results/${recog_model}
+        #${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
+        #    universe_recog.py \
+        #    --config ${decode_config} \
+        #    --ngpu ${ngpu} \
+        #    --backend ${backend} \
+        #    --batchsize 0 \
+        #    --recog-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/tst2013.de/deltafalse/split${nj}utt/data.JOB.json \
+        #    --result-label ${expdir}/${decode_dir}/data.JOB.json \
+        #    --model ${expdir}/results/${recog_model} \
 
         if [ ${rtask} = "dev.de" ] || [ ${rtask} = "test.de" ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}
         else
             set=$(echo ${rtask} | cut -f -1 -d ".")
-            local/score_bleu_reseg.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
+            local/score_bleu_reseg.sh --bpemodel /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.model /teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/universe_debug_drop/decode_tst2013.de ${dict} ${st_ted} ${set}
         fi
     ) &
     pids+=($!) # store background pids
