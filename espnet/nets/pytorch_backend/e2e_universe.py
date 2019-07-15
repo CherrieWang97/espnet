@@ -106,7 +106,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # attention
         self.att = att_for(args)
         # decoder
-        self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
+        self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist, embed=self.embed_src)
 
         # weight initialization
         self.init_like_chainer()
