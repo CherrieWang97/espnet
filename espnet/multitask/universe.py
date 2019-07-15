@@ -352,13 +352,13 @@ def train(args):
 
     asr_model, mt_model = None, None
     # Initialize encoder with pre-trained ASR encoder
+      
     if args.asr_model:
-        asr_model, _ = load_trained_model(args.asr_model)
-
-    # Initialize decoder with pre-trained MT decoder
+        asr_model = E2E(idim, args.vocab_size, args)
+        torch_load(args.asr_model, asr_model) 
     if args.mt_model:
-        mt_model, _ = load_trained_model(args.mt_model)
-
+        mt_model = E2E(idim, args.vocab_size, args)
+        torch_load(args.mt_model, mt_model)    
     # specify model architecture
     model = E2E(idim, args.vocab_size, args, asr_model=asr_model, mt_model=mt_model)
     assert isinstance(model, ASRInterface)
