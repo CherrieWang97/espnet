@@ -198,15 +198,16 @@ class CustomEvaluator(extensions.Evaluator):
             for batch in it:
                 observation = {}
                 with reporter_module.report_scope(observation):
-                    # read scp files
+                    # rea or self.task == "mtl"d scp files
                     # x: original json with loaded features
                     #    will be converted to chainer variable later
-                    if self.task == "st":
-                        lang_id = 10001
+                    if self.task == "asr":
+                        x = self.converter(batch, self.device, 10000)
+                        self.model(*x, task="asr")
                     else:
-                        lang_id = 10000
-                    x = self.converter(batch, self.device, lang_id)
-                    self.model(*x, task=self.task)
+                        x = self.converter(batch, self.device)
+                        self.model(*x, task="st")
+
                 summary.add(observation)
         self.model.train()
 
@@ -526,7 +527,7 @@ def train(args):
         lossname = "asrloss"
         accname = "asracc"
 
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(5000, 'iteration'))
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(10, 'iteration'))
 
     trainer.extend(extensions.PlotReport(['main/' + lossname, 'validation/main/'+lossname],
                                          'iteration', file_name=lossname+'.png'), trigger=(5000, 'iteration'))
