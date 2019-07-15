@@ -419,8 +419,9 @@ def train(args):
     if args.train_json:
         with open(args.train_json, 'rb') as f:
             train_json = json.load(f)['utts']
-    with open(args.valid_json, 'rb') as f:
-        valid_json = json.load(f)['utts']
+    if args.valid_json:
+        with open(args.valid_json, 'rb') as f:
+            valid_json = json.load(f)['utts']
     if args.asr_json:
         with open(args.asr_json, 'rb') as f:
             asr_json = json.load(f)['utts']
@@ -468,8 +469,10 @@ def train(args):
         mt_iter = ToggleableShufflingSerialIterator(
                 TransformDataset(mt_train, mt_converter.transform),
                 batch_size=1, shuffle=not use_sortagrad)
-
-    valid = make_batchset(valid_json, args.batch_size * 2,
+    if args.task == "mt":
+        valid = make_mtbatchset(args.valid_src, args.valid_trg, args.mt_batch_size)
+    else:
+        valid = make_batchset(valid_json, args.batch_size * 2,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           count=args.batch_count,
@@ -500,6 +503,8 @@ def train(args):
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="asr")
     elif args.task == "mt":
         iters = {"main": mt_iter}
+        updater = MTUpdater(
+            model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)
     # Set up a trainer
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
