@@ -171,12 +171,13 @@ class CustomEvaluator(extensions.Evaluator):
     :param torch.device device : The device used
     """
 
-    def __init__(self, model, iterator, target, converter, device, task="st"):
+    def __init__(self, model, iterator, target, converter, device, task="st", lang_id=10001):
         super(CustomEvaluator, self).__init__(iterator, target)
         self.model = model
         self.converter = converter
         self.device = device
         self.task = task
+        self.lang_id = lang_id
 
     # The core part of the update routine can be customized by overriding
     def evaluate(self):
@@ -201,11 +202,10 @@ class CustomEvaluator(extensions.Evaluator):
                     # rea or self.task == "mtl"d scp files
                     # x: original json with loaded features
                     #    will be converted to chainer variable later
+                    x = self.converter(batch, self.device, self.lang_id)
                     if self.task == "asr":
-                        x = self.converter(batch, self.device, 10000)
                         self.model(*x, task="asr")
                     else:
-                        x = self.converter(batch, self.device)
                         self.model(*x, task="st")
 
                 summary.add(observation)
@@ -494,7 +494,7 @@ def train(args):
                  "mt": mt_iter}
         updater = CustomUpdater(
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id)
-    elif args.task == ":st":
+    elif args.task == "st":
         iters = {"main": train_iter}
         updater = ASRUpdater(
             model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, args.src_id, args.trg_id, task="st")
@@ -523,11 +523,13 @@ def train(args):
     if args.task == "mtl" or args.task == "st":
         lossname = "stloss"
         accname = "stacc"
+        lang_id = args.trg_id
     elif args.task == "asr":
         lossname = "asrloss"
         accname = "asracc"
+        lang_id = args.src_id
 
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task), trigger=(5000, 'iteration'))
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device, task=args.task, lang_id=lang_id), trigger=(5000, 'iteration'))
 
     trainer.extend(extensions.PlotReport(['main/' + lossname, 'validation/main/'+lossname],
                                          'iteration', file_name=lossname+'.png'), trigger=(5000, 'iteration'))
