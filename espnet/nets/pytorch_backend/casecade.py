@@ -124,9 +124,8 @@ class E2E(ASRInterface, torch.nn.Module):
         if asr_model is not None:
             param_dict = dict(asr_model.named_parameters())
             for n, p in self.named_parameters():
-                asr_n = n.lstrip('s')
-                if 'enc.enc' in n and asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    p.data = param_dict[asr_n].data
+                if 'enc.enc' in n and n in param_dict.keys() and p.size() == param_dict[n].size():
+                    p.data = param_dict[n].data
                     logging.warning('Overwrite %s' % n)
                 asr_n = n.lstrip('src')
                 if asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
@@ -142,6 +141,7 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'trgdec' in n or 'trgatt.' in n:
                         p.data = param_dict[mt_dec_n].data
                         logging.warning('Overwrite %s' % n)
+            #self.srcdec.embed.weight[:10000, :] = mt_model.dec.embed.weight
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
             for n, p in self.named_parameters():

@@ -130,7 +130,6 @@ class Decoder(torch.nn.Module):
         """
         # TODO(kan-bayashi): need to make more smart way
         ys = [y[y != self.ignore_id] for y in ys_pad]  # parse padded ys
-        ys_len = [len(y)+1 for y in ys_pad]
         # attention index for the attention module
         # in SPA (speaker parallel attention), att_idx is used to select attention module. In other cases, it is 0.
         att_idx = min(strm_idx, len(self.att) - 1)
@@ -156,8 +155,9 @@ class Decoder(torch.nn.Module):
         # get dim, length info
         batch = ys_out_pad.size(0)
         olength = ys_out_pad.size(1)
+        zlens = [y.size(0) for y in ys_out]
         logging.info(self.__class__.__name__ + ' input lengths:  ' + str(hlens))
-        logging.info(self.__class__.__name__ + ' output lengths: ' + str([y.size(0) for y in ys_out]))
+        logging.info(self.__class__.__name__ + ' output lengths: ' + str(zlens))
 
         # initialization
         c_list = [self.zero_state(hs_pad)]
@@ -230,7 +230,7 @@ class Decoder(torch.nn.Module):
             loss_reg = - torch.sum((F.log_softmax(y_all, dim=1) * self.vlabeldist).view(-1), dim=0) / len(ys_in)
             self.loss = (1. - self.lsm_weight) * self.loss + self.lsm_weight * loss_reg
 
-        return self.loss, acc, z_all.view(batch, olength, -1), ys_len
+        return self.loss, acc, z_all.view(batch, olength, -1), zlens
 
     def recognize_beam(self, h, lpz, recog_args, char_list, rnnlm=None, strm_idx=0):
         """beam search implementation

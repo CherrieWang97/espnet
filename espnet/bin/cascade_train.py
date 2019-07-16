@@ -257,6 +257,8 @@ def main(cmd_args):
         char_list.append('<de>')
         args.char_list = char_list
         args.vocab_size += 2
+        args.src_id = char_list.index('<en>')
+        args.trg_id = char_list.index('<de>')
     else:
         args.char_list = None
 
