@@ -64,7 +64,7 @@ class Decoder(torch.nn.Module):
         self.decoder = torch.nn.ModuleList()
         self.dropout_dec = torch.nn.ModuleList()
         self.decoder += [
-            torch.nn.LSTMCell(dunits + eprojs, dunits) if self.dtype == "lstm" else torch.nn.GRUCell(dunits + eprojs,
+            torch.nn.LSTMCell(dunits * 2 + eprojs, dunits) if self.dtype == "lstm" else torch.nn.GRUCell(dunits + eprojs,
                                                                                                      dunits)]
         self.dropout_dec += [torch.nn.Dropout(p=dropout)]
         for _ in six.moves.range(1, self.dlayers):
@@ -77,12 +77,13 @@ class Decoder(torch.nn.Module):
         self.ignore_id = -1
 
         if context_residual:
-            self.output = torch.nn.Linear(dunits + eprojs, odim)
+            self.output = torch.nn.Linear(dunits * 2 + eprojs, odim)
         else:
             self.output = torch.nn.Linear(dunits, odim)
 
         self.loss = None
         self.att = att
+        assert len(self.att) == 2
         self.dunits = dunits
         self.sos = sos
         self.eos = eos
@@ -116,7 +117,7 @@ class Decoder(torch.nn.Module):
                 z_list[l] = self.decoder[l](self.dropout_dec[l - 1](z_list[l - 1]), z_prev[l])
         return z_list, c_list
 
-    def forward(self, hs_pad, hlens, ys_pad, strm_idx=0, tgt_lang_ids=None):
+    def forward(self, hs_pad, hlens, zs_pad, zlens, ys_pad, strm_idx=0, tgt_lang_ids=None):
         """Decoder forward
 
         :param torch.Tensor hs_pad: batch of padded hidden state sequences (B, Tmax, D)
@@ -133,7 +134,6 @@ class Decoder(torch.nn.Module):
         ys = [y[y != self.ignore_id] for y in ys_pad]  # parse padded ys
         # attention index for the attention module
         # in SPA (speaker parallel attention), att_idx is used to select attention module. In other cases, it is 0.
-        att_idx = min(strm_idx, len(self.att) - 1)
 
         # hlen should be list of integer
         hlens = list(map(int, hlens))
@@ -156,9 +156,9 @@ class Decoder(torch.nn.Module):
         # get dim, length info
         batch = ys_out_pad.size(0)
         olength = ys_out_pad.size(1)
-        zlens = [y.size(0) for y in ys_out]
+        ylens = [y.size(0) for y in ys_out]
         logging.info(self.__class__.__name__ + ' input lengths:  ' + str(hlens))
-        logging.info(self.__class__.__name__ + ' output lengths: ' + str(zlens))
+        logging.info(self.__class__.__name__ + ' output lengths: ' + str(ylens))
 
         # initialization
         c_list = [self.zero_state(hs_pad)]
@@ -167,26 +167,27 @@ class Decoder(torch.nn.Module):
             c_list.append(self.zero_state(hs_pad))
             z_list.append(self.zero_state(hs_pad))
         att_w = None
+        att_w1 = None
         z_all = []
-        self.att[att_idx].reset()  # reset pre-computation of h
-
+        self.att[0].reset()  # reset pre-computation of h
+        self.att[1].reset()
         # pre-computation of embedding
         eys = self.dropout_emb(self.embed(ys_in_pad))  # utt x olen x zdim
-
         # loop for an output sequence
         for i in six.moves.range(olength):
-            att_c, att_w = self.att[att_idx](hs_pad, hlens, self.dropout_dec[0](z_list[0]), att_w)
+            att_c, att_w = self.att[0](hs_pad, hlens, self.dropout_dec[0](z_list[0]), att_w)
+            att_c1, att_w1 = self.att[1](zs_pad, zlens, self.dropout_dec[0](z_list[0]), att_w1)
             if i > 0 and random.random() < self.sampling_probability:
                 logging.info(' scheduled sampling ')
                 z_out = self.output(z_all[-1])
                 z_out = np.argmax(z_out.detach().cpu(), axis=1)
                 z_out = self.dropout_emb(self.embed(z_out.cuda()))
-                ey = torch.cat((z_out, att_c), dim=1)  # utt x (zdim + hdim)
+                ey = torch.cat((z_out, att_c, att_c1), dim=1)  # utt x (zdim + hdim)
             else:
-                ey = torch.cat((eys[:, i, :], att_c), dim=1)  # utt x (zdim + hdim)
+                ey = torch.cat((eys[:, i, :], att_c, att_c1), dim=1)  # utt x (zdim + hdim)
             z_list, c_list = self.rnn_forward(ey, z_list, c_list, z_list, c_list)
             if self.context_residual:
-                z_all.append(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1))  # utt x (zdim + hdim)
+                z_all.append(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c, att_c1), dim=-1))  # utt x (zdim + hdim)
             else:
                 z_all.append(self.dropout_dec[-1](z_list[-1]))  # utt x (zdim)
 
