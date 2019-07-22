@@ -194,6 +194,7 @@ class CustomUpdater(training.StandardUpdater):
         # Get the next batch ( a list of json files)
         batch = st_iter.next()
         x = self.converter(batch, self.device, self.src_id, self.trg_id)
+        pdb.set_trace()
         loss = self.model(*x).mean()
         loss.backward()
         self.iteration += 1
@@ -334,7 +335,7 @@ def train(args):
     # actual bathsize is included in a list
     train_iter = ToggleableShufflingSerialIterator(
         TransformDataset(train, load_tr),
-        batch_size=1, shuffle=not use_sortagrad)
+        batch_size=1, shuffle=False)
     valid_iter = ToggleableShufflingSerialIterator(
         TransformDataset(valid, load_cv),
         batch_size=1, repeat=False, shuffle=False)
@@ -352,7 +353,7 @@ def train(args):
     # Resume from a snapshot
     if args.resume:
         logging.info('resumed from %s' % args.resume)
-        torch_resume(args.resume, trainer)
+        torch_load(args.resume, model)
 
     # Evaluate the model with the test dataset for each epoch
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
@@ -429,9 +430,11 @@ def recog(args):
     if args.st_model:
         st_model, _ = load_trained_model(args.st_model)
         assert isinstance(st_model, ASRInterface)
+    else:
+        st_model = None
   
     model = E2E(idim, vocab_size, train_args, st_model=st_model)
-    #torch_load(args.model, model)
+    torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)

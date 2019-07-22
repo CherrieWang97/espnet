@@ -59,7 +59,7 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
+recog_set="tst2013.de"
 
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
@@ -103,7 +103,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     pids=() # initialize pids
     for rtask in ${recog_set}; do
     (
-        decode_dir=decode_${rtask}
+        decode_dir=decode_${expname}
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
         # split data
@@ -115,7 +115,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p ${expdir}/${decode_dir}
 
         ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
+            cascade_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \

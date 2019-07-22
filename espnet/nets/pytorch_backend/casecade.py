@@ -5,6 +5,7 @@
 
 
 from __future__ import division
+import pdb
 import argparse
 import logging
 import math
@@ -289,7 +290,7 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
-        hs, _, _ = self.enc(hs, hlens)
+        hs, hlens, _ = self.enc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
@@ -299,12 +300,15 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y1 = self.srcdec.recognize_beam(hs[0], lpz, recog_args, recog_args.src_lang, char_list, rnnlm)
+        zs = torch.stack(y1[0]['hidden'], dim=1)
+        zs = self.linear(zs)
+        y2 = self.trgdec.recognize_beam(zs[0], lpz, recog_args, recog_args.tgt_lang, char_list, rnnlm)
 
         if prev:
             self.train()
 
-        return y
+        return y2
 
     def recognize_batch(self, xs, recog_args, char_list, rnnlm=None):
         """E2E beam search

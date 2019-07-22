@@ -233,7 +233,7 @@ class Decoder(torch.nn.Module):
 
         return self.loss, acc, z_all.view(batch, olength, -1), zlens
 
-    def recognize_beam(self, h, lpz, recog_args, char_list, rnnlm=None, strm_idx=0):
+    def recognize_beam(self, h, lpz, recog_args,lang_token, char_list, rnnlm=None, strm_idx=0):
         """beam search implementation
 
         :param torch.Tensor h: encoder hidden state (T, eprojs)
@@ -250,6 +250,8 @@ class Decoder(torch.nn.Module):
         # initialization
         c_list = [self.zero_state(h.unsqueeze(0))]
         z_list = [self.zero_state(h.unsqueeze(0))]
+        hidden = self.zero_state(h.unsqueeze(0))
+
         for _ in six.moves.range(1, self.dlayers):
             c_list.append(self.zero_state(h.unsqueeze(0)))
             z_list.append(self.zero_state(h.unsqueeze(0)))
@@ -262,8 +264,8 @@ class Decoder(torch.nn.Module):
         ctc_weight = recog_args.ctc_weight
 
         # preprate sos
-        if self.replace_sos and recog_args.tgt_lang:
-            y = char_list.index(recog_args.tgt_lang)
+        if self.replace_sos:
+            y = char_list.index(lang_token)
         else:
             y = self.sos
         logging.info('<sos> index: ' + str(y))
@@ -282,9 +284,9 @@ class Decoder(torch.nn.Module):
         # initialize hypothesis
         if rnnlm:
             hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list,
-                   'z_prev': z_list, 'a_prev': a, 'rnnlm_prev': None}
+                   'z_prev': z_list, 'a_prev': a, 'rnnlm_prev': None, 'hidden': []}
         else:
-            hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a}
+            hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a, 'hidden': []}
         if lpz is not None:
             ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), 0, self.eos, np)
             hyp['ctc_state_prev'] = ctc_prefix_score.initial_state()
@@ -313,9 +315,12 @@ class Decoder(torch.nn.Module):
 
                 # get nbest local scores and their ids
                 if self.context_residual:
-                    logits = self.output(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1))
+                    hidden = torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1)
+                    logits = self.output(hidden)
                 else:
-                    logits = self.output(self.dropout_dec[-1](z_list[-1]))
+                    hidden = self.dropout_dec[-1](z_list[-1])
+                    logits = self.output(hidden)
+                hyp['hidden'].append(hidden)
                 local_att_scores = F.log_softmax(logits, dim=1)
                 if rnnlm:
                     rnnlm_state, local_lm_scores = rnnlm.predict(hyp['rnnlm_prev'], vy)
@@ -346,6 +351,7 @@ class Decoder(torch.nn.Module):
                     new_hyp['a_prev'] = att_w[:]
                     new_hyp['score'] = hyp['score'] + local_best_scores[0, j]
                     new_hyp['yseq'] = [0] * (1 + len(hyp['yseq']))
+                    new_hyp['hidden'] = hyp['hidden']
                     new_hyp['yseq'][:len(hyp['yseq'])] = hyp['yseq']
                     new_hyp['yseq'][len(hyp['yseq'])] = int(local_best_ids[0, j])
                     if rnnlm:
