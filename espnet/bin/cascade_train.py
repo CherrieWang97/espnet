@@ -42,7 +42,7 @@ def get_parser():
                         help='Debugmode')
     parser.add_argument('--dict', required=True,
                         help='Dictionary for target language')
-    parser.add_argument('--share_dict', default=False, nargs='?')
+    parser.add_argument('--share_dict', default=True, nargs='?')
     parser.add_argument('--vocab_size', default=10000, type=int)
     parser.add_argument('--trg_vocab', default=5000, type=int)
     parser.add_argument('--seed', default=1, type=int,

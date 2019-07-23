@@ -194,10 +194,9 @@ class CustomUpdater(training.StandardUpdater):
         # Get the next batch ( a list of json files)
         batch = st_iter.next()
         x = self.converter(batch, self.device, self.src_id, self.trg_id)
-        pdb.set_trace()
+        #pdb.set_trace()
         loss = self.model(*x).mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -356,7 +355,7 @@ def train(args):
         torch_load(args.resume, model)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device), trigger=(5000, 'iteration'))
 
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/stloss', 'validation/main/stloss'],

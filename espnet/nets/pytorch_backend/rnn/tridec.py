@@ -234,7 +234,7 @@ class Decoder(torch.nn.Module):
 
         return self.loss, acc, z_all.view(batch, olength, -1), zlens
 
-    def recognize_beam(self, h, lpz, recog_args, char_list, rnnlm=None, strm_idx=0):
+    def recognize_beam(self, h, z, lpz, recog_args, char_list, rnnlm=None, strm_idx=0):
         """beam search implementation
 
         :param torch.Tensor h: encoder hidden state (T, eprojs)
@@ -255,7 +255,8 @@ class Decoder(torch.nn.Module):
             c_list.append(self.zero_state(h.unsqueeze(0)))
             z_list.append(self.zero_state(h.unsqueeze(0)))
         a = None
-        self.att[att_idx].reset()  # reset pre-computation of h
+        self.att[0].reset()  # reset pre-computation of h
+        self.att[1].reset()
 
         # search parms
         beam = recog_args.beam_size
@@ -307,14 +308,16 @@ class Decoder(torch.nn.Module):
                 vy[0] = hyp['yseq'][i]
                 ey = self.dropout_emb(self.embed(vy))  # utt list (1) x zdim
                 ey.unsqueeze(0)
-                att_c, att_w = self.att[att_idx](h.unsqueeze(0), [h.size(0)],
+                att_c, att_w = self.att[0](h.unsqueeze(0), [h.size(0)],
                                                  self.dropout_dec[0](hyp['z_prev'][0]), hyp['a_prev'])
-                ey = torch.cat((ey, att_c), dim=1)  # utt(1) x (zdim + hdim)
+                att_c1, att_w1 = self.att[1](z.unsqueeze(0), [z.size(0)],
+                                                 self.dropout_dec[0](hyp['z_prev'][0]), hyp['a_prev'])
+                ey = torch.cat((ey, att_c, att_c1), dim=1)  # utt(1) x (zdim + hdim)
                 z_list, c_list = self.rnn_forward(ey, z_list, c_list, hyp['z_prev'], hyp['c_prev'])
 
                 # get nbest local scores and their ids
                 if self.context_residual:
-                    logits = self.output(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1))
+                    logits = self.output(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c, att_c1), dim=-1))
                 else:
                     logits = self.output(self.dropout_dec[-1](z_list[-1]))
                 local_att_scores = F.log_softmax(logits, dim=1)
