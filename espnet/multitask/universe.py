@@ -536,10 +536,10 @@ def train(args):
     trainer.extend(extensions.PlotReport(['main/' + accname, 'validation/main/' + accname],
                                          'iteration', file_name=accname + '.png'), trigger=(5000, 'iteration'))
     trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/' + lossname))
+                   trigger=training.triggers.MinValueTrigger('validation/main/' + lossname, trigger=(5000, 'iteration')))
 
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/' + accname))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/' + accname, trigger=(5000, 'iteration')))
         
 
     # save snapshot which contains model and optimizer states
@@ -551,11 +551,11 @@ def train(args):
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
