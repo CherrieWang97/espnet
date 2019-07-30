@@ -254,7 +254,6 @@ class ASRUpdater(training.StandardUpdater):
             x = self.converter(batch, self.device, self.trg_id)
         loss = self.model(*x, task=self.task).mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -318,7 +317,6 @@ class CustomUpdater(training.StandardUpdater):
             ys = ys.to(self.device)
             loss = self.model(xs, ilens, ys, task="mt").mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
