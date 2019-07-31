@@ -252,7 +252,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         cs_pad, clens, _ = self.enc(hs_pad, hlens)
 
-        if task == "asr" and self.mtalpha == 1.0:
+        if task == "asr" and self.mtlalpha == 1.0:
             loss_att = 0.0
             ppl = 0.0
             acc = 0.0
