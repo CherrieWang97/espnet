@@ -59,13 +59,13 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
+recog_set="tst2013.de"
 
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
 feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
 
-dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_de.txt
+dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.txt
 
 # NOTE: skip stage 3: LM Preparation
 
