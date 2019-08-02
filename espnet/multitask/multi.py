@@ -159,7 +159,6 @@ class CustomUpdater(training.StandardUpdater):
             ys.to(self.device)
             loss = self.model(xs, ilens, ys, task="mt").mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -341,21 +340,21 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device), trigger=(5000, 'iteration'))
 
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/stloss', 'validation/main/stloss'],
-                                         'epoch', file_name='stloss.png'))
+                                         'epoch', file_name='stloss.png'), trigger=(5000, 'iteration'))
     trainer.extend(extensions.PlotReport(['main/stacc', 'validation/main/stacc'],
-                                         'epoch', file_name='stacc.png'))
+                                         'epoch', file_name='stacc.png'), trigger=(5000, 'iteration'))
 
 
     # Save best models
     trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/stloss'))
+                   trigger=training.triggers.MinValueTrigger('validation/main/stloss', trigger=(5000, 'iteration')))
 
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/stacc'))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/stacc', trigger=(5000, 'iteration')))
 
     # save snapshot which contains model and optimizer states
     trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
@@ -366,20 +365,20 @@ def train(args):
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
                                'validation/main/stacc',
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value,trigger=(5000, 'iteration')))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
                                'validation/main/stacc',
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
                                'validation/main/stloss',
-                               lambda best_value, current_value: best_value < current_value))
+                               lambda best_value, current_value: best_value < current_value, trigger=(5000, 'iteration')))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
                                'validation/main/stloss',
-                               lambda best_value, current_value: best_value < current_value))
+                               lambda best_value, current_value: best_value < current_value, trigger=(5000, 'iteration')))
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))

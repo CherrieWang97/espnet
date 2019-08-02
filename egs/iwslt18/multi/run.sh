@@ -26,8 +26,8 @@ decode_config=conf/decode.yaml
 recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.best' or 'model.loss.best'
 
 # pre-training related
-asr_model=/hdfs/resrchvc/v-chengw/iwslt18/exp4asr/asr_vgg_500/results/model.acc.best
-mt_model=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/model.acc.best
+asr_model= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4asr/asr_vgg_500/results/model.acc.best
+mt_model=  #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4mt/mt_ted/results/model.acc.best
 
 # preprocessing related
 case=lc
@@ -38,8 +38,8 @@ case=lc
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-st_ted=/hdfs/resrchvc/v-chengw/iwslt18/data
-dumpdir=/hdfs/resrchvc/v-chengw/iwslt18/data4st/dump    # directory to dump full features
+st_ted=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data
+dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dump    # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -59,19 +59,19 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
+recog_set="tst2013.de"
 
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
 feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
 
-dict=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_de.txt
+dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.txt
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=multitask
+expname=multitask_asr
 
-expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4st/${expname}
+expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
 mkdir -p exp
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
@@ -90,13 +90,11 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/data_newsubword.json \
-        --valid-json ${feat_dt_dir}/data_newsubword.json \
-        --asr-json /hdfs/resrchvc/v-chengw/iwslt18/data4asr/dump/train/deltafalse/data_newsubword.json \
-        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.en.id \
-        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.de.id \
-        --asr-model ${asr_model} \
-        --mt-model ${mt_model} 
+        --train-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/train/data_share.json \
+        --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_share.json \
+        --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_share.json \
+        --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/st/dev/text.en.share.id \
+        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/st/dev/text.de.share.id 
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then

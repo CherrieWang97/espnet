@@ -549,11 +549,11 @@ def train(args):
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
