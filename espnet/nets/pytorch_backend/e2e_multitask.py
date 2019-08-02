@@ -252,9 +252,12 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             tgt_lang_ids = None
 
-        if task == "st" or task == "asr":
+        if task == "asr":
             hs_pad, hlens, _ = self.senc(hs_pad, hlens)
+        elif task == "mt":
+            hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
         else:
+            hs_pad, hlens, _ = self.senc(hs_pad, hlens)
             hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
 
 

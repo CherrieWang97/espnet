@@ -5,7 +5,7 @@ eunits: 1024
 eprojs: 1024
 subsample: "1_2_2_1_1" # skip every n frame from input to nth layers
 # decoder related
-dlayers: 2
+dlayers: 4
 dunits: 1024
 context-residual: true
 # attention related
