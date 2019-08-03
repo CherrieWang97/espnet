@@ -111,6 +111,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
+        self.ctc = ctc_for(args, src_vocab_size)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
@@ -120,7 +121,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = self.srcdec.embed
+        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -150,6 +151,9 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'trgdec' in n or 'trgatt.0' in n:
                         p.data = param_dict[mt_dec_n].data
                         logging.warning('Overwrite %s' % n)
+            self.embed.weight.data = mt_model.embed_src.weight.data
+            self.ctc.ctc_lo.weight = self.embed.weight
+
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
             for n, p in self.named_parameters():
@@ -263,7 +267,9 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 3. attention loss
         if task == "asr":
-            loss, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
+            loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            loss = 0.5 * loss_ctc + 0.5 * loss_att
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
@@ -309,7 +315,8 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
-        hs, _, _ = self.senc(hs, hlens)
+        hs, hlens, _ = self.senc(hs, hlens)
+        hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
