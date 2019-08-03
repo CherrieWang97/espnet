@@ -411,12 +411,13 @@ def recog(args):
     set_deterministic_pytorch(args)
     idim, src_vocab, trg_vocab, train_args = get_model_conf(args.model, os.path.join(os.path.dirname(args.model), 'model.json'))
     logging.info('reading model parameters from ' + args.model)
+    st_model = None
     if args.st_model:
         st_model, _ = load_trained_model(args.st_model)
         assert isinstance(st_model, ASRInterface)
   
     model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model)
-    #torch_load(args.model, model)
+    torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)
