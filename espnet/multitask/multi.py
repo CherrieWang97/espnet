@@ -3,6 +3,7 @@
 # Copyright 2017 Johns Hopkins University (Shinji Watanabe)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 import copy
+import pdb
 import json
 import logging
 import math
@@ -143,6 +144,7 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
+        pdb.set_trace()
         if self.iteration % 1000 < 600:
             batch = st_iter.next()
             x = self.converter(batch, self.device)
@@ -414,9 +416,11 @@ def recog(args):
     if args.st_model:
         st_model, _ = load_trained_model(args.st_model)
         assert isinstance(st_model, ASRInterface)
+    else:
+        st_model = None
   
     model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model)
-    #torch_load(args.model, model)
+    torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)
