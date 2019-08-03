@@ -97,35 +97,35 @@ class E2E(ASRInterface, torch.nn.Module):
 
 
         self.frontend = None
-        self.prenet = PreNet(idim, 2, args.eunits, args.dropout_rate)
+        self.prenet = Encoder('vggblstm', idim, args.elayers, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
         self.ctc = ctc_for(args, 10002)
         # encoder
         self.embed_src = torch.nn.Embedding(10002, args.eunits, padding_idx=self.eos, _weight=self.ctc.ctc_lo.weight)
         self.dropemb = torch.nn.Dropout(p=args.dropout_rate)
-        self.enc = Encoder('blstm', args.eunits, 3, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
+        self.enc = Encoder('blstm', args.eunits, 2, args.eunits, args.eprojs, subsample, dropout=args.dropout_rate)
         # attention
         self.att = att_for(args)
         # decoder
         self.dec = decoder_for(args, odim, self.sos, self.eos, self.att, labeldist)
         # weight initialization
         self.init_like_chainer()
-
         # pre-training w/ ASR encoder and NMT decoder
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
                 # overwrite the decoder
                 if n in param_dict.keys() and p.size() == param_dict[n].size():
-                    if 'enc.' in n or'dec.' in n or 'att' in n:
+                    if 'enc.enc' in n or'dec.' in n or 'att' in n:
                         p.data = param_dict[n].data
                         logging.warning('Overwrite %s from mt model' % n)
         if asr_model is not None:
             param_dict = dict(asr_model.named_parameters())
             for n, p in self.named_parameters():
                 # overwrite the encoder
-                if n in param_dict.keys() and p.size() == param_dict[n].size():
+                asr_n = n.replace('prenet', 'enc')
+                if asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
                     if 'prenet' in n or 'ctc' in n :
-                        p.data = param_dict[n].data
+                        p.data = param_dict[asr_n].data
                         logging.warning('Overwrite %s from asr model' % n)
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
@@ -252,7 +252,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         cs_pad, clens, _ = self.enc(hs_pad, hlens)
 
-        if task == "asr" and self.mtalpha == 1.0:
+        if task == "asr" and self.mtlalpha == 1.0:
             loss_att = 0.0
             ppl = 0.0
             acc = 0.0
@@ -260,28 +260,7 @@ class E2E(ASRInterface, torch.nn.Module):
             loss_att, acc, ppl = self.dec(cs_pad, clens, ys_pad, tgt_lang_ids=tgt_lang_ids)
 
         # 4. compute cer without beam search
-        if task == "asr":
-            cers = []
-
-            y_hats = self.ctc.argmax(hs_pad).data
-            for i, y in enumerate(y_hats):
-                y_hat = [x[0] for x in groupby(y)]
-                y_true = ys_pad[i]
-
-                seq_hat = [self.char_list[int(idx)] for idx in y_hat if int(idx) != -1]
-                seq_true = [self.char_list[int(idx)] for idx in y_true if int(idx) != -1]
-                seq_hat_text = "".join(seq_hat).replace(self.space, ' ')
-                seq_hat_text = seq_hat_text.replace(self.blank, '')
-                seq_true_text = "".join(seq_true).replace(self.space, ' ')
-
-                hyp_chars = seq_hat_text.replace(' ', '')
-                ref_chars = seq_true_text.replace(' ', '')
-                if len(ref_chars) > 0:
-                    cers.append(editdistance.eval(hyp_chars, ref_chars) / len(ref_chars))
-
-            cer_ctc = sum(cers) / len(cers) if cers else None
-        else:
-            cer_ctc = 0
+        cer_ctc = 0
 
 
         alpha = self.mtlalpha
