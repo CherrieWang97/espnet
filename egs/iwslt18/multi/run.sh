@@ -26,8 +26,8 @@ decode_config=conf/decode.yaml
 recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.best' or 'model.loss.best'
 
 # pre-training related
-asr_model= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4asr/asr_vgg_500/results/model.acc.best
-mt_model=  #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4mt/mt_ted/results/model.acc.best
+asr_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4asr/asr_vgg_500/model.acc.best
+mt_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4mt/mt_finetune/model.acc.best
 
 # preprocessing related
 case=lc
@@ -39,7 +39,7 @@ case=lc
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
 st_ted=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data
-dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dump    # directory to dump full features
+dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st   # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -65,11 +65,11 @@ recog_set="tst2013.de"
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
 feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
 
-dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_share.txt
+dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_de.txt
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=multitask_asr
+expname=premtl_subword_ctc
 
 expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
@@ -90,11 +90,13 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/train/data_share.json \
-        --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_share.json \
-        --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_share.json \
-        --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/st/dev/text.en.share.id \
-        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/st/dev/text.de.share.id 
+        --train-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/train/data_newsubword.json \
+        --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_newsubword.json \
+        --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_newsubword.json \
+        --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.en.id \
+        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.de.id \
+        --asr-model ${asr_model} \
+        --mt-model ${mt_model}
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
@@ -116,7 +118,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p ${expdir}/${decode_dir}
 
         ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
+            multi_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
@@ -129,7 +131,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}
         else
             set=$(echo ${rtask} | cut -f -1 -d ".")
-            local/score_bleu_reseg.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
+            local/score_bleu_reseg.sh --bpemodel /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_de.model ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
         fi
     ) &
     pids+=($!) # store background pids
