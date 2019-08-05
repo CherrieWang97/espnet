@@ -6,6 +6,7 @@
 
 from __future__ import division
 import argparse
+import pdb
 import logging
 import math
 import os
@@ -115,6 +116,7 @@ class E2E(ASRInterface, torch.nn.Module):
             embed = self.srcdec.embed
         else:
             embed = None
+        self.ctc = ctc_for(args, src_vocab_size)
         self.trgdec = Decoder(args.eprojs, trg_vocab_size, args.dtype, args.trgdlayers, args.dunits, self.sos, self.eos, self.trgatt,
                                args.verbose,
                                 args.char_list, labeldist,
@@ -260,10 +262,11 @@ class E2E(ASRInterface, torch.nn.Module):
             hs_pad, hlens, _ = self.senc(hs_pad, hlens)
             hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
 
-
         # 3. attention loss
         if task == "asr":
-            loss, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
+            loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            loss = 0.5 * loss_ctc + 0.5 * loss_att
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
@@ -319,7 +322,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y = self.srcdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
 
         if prev:
             self.train()
