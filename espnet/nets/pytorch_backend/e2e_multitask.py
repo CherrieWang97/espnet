@@ -106,12 +106,12 @@ class E2E(ASRInterface, torch.nn.Module):
         self.srcatt = att_for(args)
         self.trgatt = att_for(args, 2)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
+        self.srcdec = Decoder(args.eprojs, src_vocab_size+1, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
                                 args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
-        self.ctc = ctc_for(args, src_vocab_size)
+        self.ctc = ctc_for(args, src_vocab_size+1)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
@@ -121,7 +121,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
+        self.embed = torch.nn.Embedding(src_vocab_size+1, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -316,7 +316,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 1. encoder
         hs, hlens, _ = self.senc(hs, hlens)
-        hs, _, _ = self.tenc(hs, hlens)
+        #hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
@@ -326,7 +326,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y = self.srcdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
 
         if prev:
             self.train()
