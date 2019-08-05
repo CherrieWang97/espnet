@@ -111,7 +111,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
-        self.ctc = ctc_for(args, src_vocab_size+1)
+        self.ctc = ctc_for(args, src_vocab_size+1, bias=False)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
@@ -151,7 +151,7 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'trgdec' in n or 'trgatt.0' in n:
                         p.data = param_dict[mt_dec_n].data
                         logging.warning('Overwrite %s' % n)
-            self.embed.weight.data = mt_model.embed_src.weight.data
+            self.embed.weight.data[:5000] = mt_model.embed_src.weight.data
             self.ctc.ctc_lo.weight = self.embed.weight
 
         if st_model is not None:
@@ -269,7 +269,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "asr":
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
             loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-            loss = 0.5 * loss_ctc + 0.5 * loss_att
+            loss =  loss_ctc #+ 0.5 * loss_att
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":

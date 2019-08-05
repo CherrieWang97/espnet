@@ -17,11 +17,11 @@ class CTC(torch.nn.Module):
     :param bool reduce: reduce the CTC loss into a scalar
     """
 
-    def __init__(self, odim, eprojs, dropout_rate, ctc_type='warpctc', reduce=True):
+    def __init__(self, odim, eprojs, dropout_rate, ctc_type='warpctc', reduce=True, bias=True):
         super(CTC, self).__init__()
         self.dropout_rate = dropout_rate
         self.loss = None
-        self.ctc_lo = torch.nn.Linear(eprojs, odim)
+        self.ctc_lo = torch.nn.Linear(eprojs, odim, bias=bias)
         self.ctc_type = ctc_type
 
         if self.ctc_type == 'builtin':
@@ -104,7 +104,7 @@ class CTC(torch.nn.Module):
         return torch.argmax(self.ctc_lo(hs_pad), dim=2)
 
 
-def ctc_for(args, odim, reduce=True):
+def ctc_for(args, odim, reduce=True, bias=True):
     """Returns the CTC module for the given args and output dimension
 
     :param Namespace args: the program args
@@ -113,4 +113,4 @@ def ctc_for(args, odim, reduce=True):
     :return: the corresponding CTC module
     """
     return CTC(odim, args.eprojs, args.dropout_rate,
-               ctc_type=args.ctc_type, reduce=reduce)
+               ctc_type=args.ctc_type, reduce=reduce, bias=bias)
