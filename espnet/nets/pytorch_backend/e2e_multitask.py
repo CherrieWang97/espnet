@@ -107,11 +107,12 @@ class E2E(ASRInterface, torch.nn.Module):
         self.srcatt = att_for(args)
         self.trgatt = att_for(args, 2)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
+        self.srcdec = Decoder(args.eprojs, src_vocab_size+1, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
                                 args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
+        self.ctc = ctc_for(args, src_vocab_size+1, bias=False)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
@@ -122,7 +123,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = self.srcdec.embed
+        self.embed = torch.nn.Embedding(src_vocab_size+1, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -152,6 +153,9 @@ class E2E(ASRInterface, torch.nn.Module):
                     if 'trgdec' in n or 'trgatt.0' in n:
                         p.data = param_dict[mt_dec_n].data
                         logging.warning('Overwrite %s' % n)
+            self.embed.weight.data[:5000] = mt_model.embed_src.weight.data
+            self.ctc.ctc_lo.weight = self.embed.weight
+
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
             for n, p in self.named_parameters():
@@ -312,7 +316,8 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
-        hs, _, _ = self.senc(hs, hlens)
+        hs, hlens, _ = self.senc(hs, hlens)
+        #hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
