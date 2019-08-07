@@ -144,22 +144,23 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
-        pdb.set_trace()
         if self.iteration % 1000 < 600:
             batch = st_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x).mean()
-        elif self.iteration % 1000 >=  800:
+        elif self.iteration % 1000 >= 800:
             batch = asr_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x, task="asr").mean()
         else:
             batch = mt_iter.next()
             xs, ilens, ys = batch[0]
-            xs.to(self.device)
-            ilens.to(self.device)
-            ys.to(self.device)
+            xs = xs.to(self.device)
+            ilens = ilens.to(self.device)
+            ys = ys.to(self.device)
             loss = self.model(xs, ilens, ys, task="mt").mean()
+        if math.isnan(float(loss)) or float(loss) > 10000.0:
+            return
         loss.backward()
 
         # compute the gradient norm to check if it is normal or not
@@ -195,8 +196,8 @@ def train(args):
     asr_model, mt_model = None, None
     # Initialize encoder with pre-trained ASR encoder
     if args.asr_model:
-        asr_model, _ = load_trained_model(args.asr_model)
-        assert isinstance(asr_model, ASRInterface)
+        asr_model = E2E(idim, args.src_vocab+1, args.trg_vocab, args)
+        torch_load(args.asr_model, asr_model)
 
     # Initialize decoder with pre-trained MT decoder
     if args.mt_model:
@@ -204,8 +205,8 @@ def train(args):
         assert isinstance(mt_model, MTInterface)
 
     # specify model architecture
-    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model)
-    assert isinstance(model, ASRInterface)
+    model = E2E(idim, args.src_vocab+1, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
+
     subsampling_factor = model.subsample[0]
 
     # delete pre-trained models
@@ -339,7 +340,7 @@ def train(args):
     # Resume from a snapshot
     if args.resume:
         logging.info('resumed from %s' % args.resume)
-        torch_resume(args.resume, trainer)
+        torch_load(args.resume, model)
 
     # Evaluate the model with the test dataset for each epoch
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device), trigger=(5000, 'iteration'))
@@ -362,6 +363,7 @@ def train(args):
     trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
 
     # epsilon decay in the optimizer
+    """
     if args.opt == 'adadelta':
         if args.criterion == 'acc':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
@@ -381,7 +383,7 @@ def train(args):
                            trigger=CompareValueTrigger(
                                'validation/main/stloss',
                                lambda best_value, current_value: best_value < current_value, trigger=(5000, 'iteration')))
-
+    """
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/stloss', 'main/stacc','validation/main/stloss', 
@@ -420,12 +422,14 @@ def recog(args):
     else:
         st_model = None
   
-    model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model)
+    model = E2E(idim, src_vocab+1, trg_vocab, train_args, st_model=st_model,bias=False)
     torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)
     model.recog_args = args
+
+    train_args.char_list.append("<blank>")
 
     # read rnnlm
     rnnlm = None
