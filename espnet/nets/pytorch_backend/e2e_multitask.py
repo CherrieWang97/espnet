@@ -57,7 +57,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
     """
 
-    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None):
+    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None, bias=True):
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
         self.senctype = args.senctype   #speech encoder type
@@ -107,23 +107,23 @@ class E2E(ASRInterface, torch.nn.Module):
         self.srcatt = att_for(args)
         self.trgatt = att_for(args, 2)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size+1, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
+        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
                                 args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
-        self.ctc = ctc_for(args, src_vocab_size+1, bias=False)
+        self.ctc = ctc_for(args, src_vocab_size, bias=bias)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
             embed = None
-        self.ctc = ctc_for(args, src_vocab_size)
         self.trgdec = Decoder(args.eprojs, trg_vocab_size, args.dtype, args.trgdlayers, args.dunits, self.sos, self.eos, self.trgatt,
                                args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = torch.nn.Embedding(src_vocab_size+1, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
+        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
+        self.embed.weight = self.ctc.ctc_lo.weight
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -131,16 +131,11 @@ class E2E(ASRInterface, torch.nn.Module):
         if asr_model is not None:
             param_dict = dict(asr_model.named_parameters())
             for n, p in self.named_parameters():
-                asr_n = n.lstrip('s')
-                if 'senc.enc' in n and asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    p.data = param_dict[asr_n].data
-                    logging.warning('Overwrite %s' % n)
-                asr_n = n.lstrip('src')
-                if asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    if 'srcdec' in n or 'srcatt' in n:
-                        p.data = param_dict[asr_n].data
-                        logging.warning('Overwrite %s' % n)
-           
+                if 'senc.enc' in n or 'ctc' in n or 'srcdec' in n or 'srcatt' in n:
+                    if n in param_dict.keys() and p.size() == param_dict[n].size():
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s from asr model' % n)
+
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
@@ -152,9 +147,7 @@ class E2E(ASRInterface, torch.nn.Module):
                 if mt_dec_n in param_dict.keys() and p.size() == param_dict[mt_dec_n].size():
                     if 'trgdec' in n or 'trgatt.0' in n:
                         p.data = param_dict[mt_dec_n].data
-                        logging.warning('Overwrite %s' % n)
-            self.embed.weight.data[:5000] = mt_model.embed_src.weight.data
-            self.ctc.ctc_lo.weight = self.embed.weight
+                        logging.warning('Overwrite %s' % n)   
 
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
@@ -270,7 +263,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "asr":
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
             loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-            loss = 0.5 * loss_ctc + 0.5 * loss_att
+            loss = loss_ctc #+ 0.5 * loss_att
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
@@ -324,6 +317,7 @@ class E2E(ASRInterface, torch.nn.Module):
             lpz = self.ctc.log_softmax(hs)[0]
         else:
             lpz = None
+        act = self.ctc.argmax(hs)
 
         # 2. Decoder
         # decode the first utterance
