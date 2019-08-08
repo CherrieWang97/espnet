@@ -1,4 +1,5 @@
 import logging
+import pdb
 import six
 
 import numpy as np
@@ -31,16 +32,19 @@ class RNNP(torch.nn.Module):
             if i == 0:
                 inputdim = idim
             else:
-                inputdim = hdim
+                if subsample[i] == 2:
+                    inputdim = cdim * 4
+                else:
+                    inputdim = cdim * 2
             rnn = torch.nn.LSTM(inputdim, cdim, dropout=dropout, num_layers=1, bidirectional=bidir,
                                 batch_first=True) if "lstm" in typ \
                 else torch.nn.GRU(inputdim, cdim, dropout=dropout, num_layers=1, bidirectional=bidir, batch_first=True)
             setattr(self, "%s%d" % ("birnn" if bidir else "rnn", i), rnn)
             # bottleneck layer to merge
-            if bidir:
-                setattr(self, "bt%d" % i, torch.nn.Linear(2 * cdim, hdim))
-            else:
-                setattr(self, "bt%d" % i, torch.nn.Linear(cdim, hdim))
+        if bidir:
+            self.l_last = torch.nn.Linear(cdim * 2, hdim)
+        else:
+            self.l_last = torch.nn.Linear(cdim, hdim)
 
         self.elayers = elayers
         self.cdim = cdim
@@ -71,12 +75,17 @@ class RNNP(torch.nn.Module):
             ys_pad, ilens = pad_packed_sequence(ys, batch_first=True)
             sub = self.subsample[layer + 1]
             if sub > 1:
-                ys_pad = ys_pad[:, ::sub]
+                if ys_pad.size(1) % 2 == 1:
+                    pad = ys_pad.new(ys_pad.size(0), ys_pad.size(1) + 1, ys_pad.size(2)).fill_(0.0)
+                    pad[:, :ys_pad.size(1), :] = ys_pad
+                    ys_pad = pad
+                ys_pad = ys_pad.reshape(ys_pad.size(0), -1, ys_pad.size(-1) * 2)
                 ilens = [int(i + 1) // sub for i in ilens]
             # (sum _utt frame_utt) x dim
-            projected = getattr(self, 'bt' + str(layer)
-                                )(ys_pad.contiguous().view(-1, ys_pad.size(2)))
-            xs_pad = torch.tanh(projected.view(ys_pad.size(0), ys_pad.size(1), -1))
+            xs_pad = ys_pad
+        projected = torch.tanh(self.l_last(
+            ys_pad.contiguous().view(-1, ys_pad.size(2))))
+        xs_pad = projected.view(ys_pad.size(0), ys_pad.size(1), -1)
 
         return xs_pad, ilens, elayer_states  # x: utt list of frame x dim
 
