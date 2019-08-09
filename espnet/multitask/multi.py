@@ -196,16 +196,16 @@ def train(args):
     asr_model, mt_model = None, None
     # Initialize encoder with pre-trained ASR encoder
     if args.asr_model:
-        asr_model = E2E(idim, args.src_vocab+1, args.trg_vocab, args)
+        asr_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
         torch_load(args.asr_model, asr_model)
 
     # Initialize decoder with pre-trained MT decoder
     if args.mt_model:
-        mt_model, _ = load_trained_model(args.mt_model)
-        assert isinstance(mt_model, MTInterface)
+        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
+        torch_load(args.mt_model, mt_model)
 
     # specify model architecture
-    model = E2E(idim, args.src_vocab+1, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
+    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
 
     subsampling_factor = model.subsample[0]
 

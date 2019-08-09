@@ -107,7 +107,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.srcatt = att_for(args)
         self.trgatt = att_for(args, 2)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
+        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, 0, 0, self.srcatt,
                                 args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
@@ -139,15 +139,10 @@ class E2E(ASRInterface, torch.nn.Module):
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
-                mt_enc_n = n.lstrip('t')
-                if 'tenc.enc' in n and mt_enc_n in param_dict.keys() and p.size() == param_dict[mt_enc_n].size():
-                    p.data = param_dict[mt_enc_n].data
-                    logging.warning('Overwrite %s' % n)
-                mt_dec_n = n.lstrip('trg')
-                if mt_dec_n in param_dict.keys() and p.size() == param_dict[mt_dec_n].size():
-                    if 'trgdec' in n or 'trgatt.0' in n:
-                        p.data = param_dict[mt_dec_n].data
-                        logging.warning('Overwrite %s' % n)   
+                if 'tenc.enc' in n or 'trgdec' in n or 'trgatt' in n:
+                    if n in param_dict.keys() and p.size() == param_dict[n].size():
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s from mt model' % n)
 
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
@@ -261,9 +256,9 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 3. attention loss
         if task == "asr":
-            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
+            #loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
             loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-            loss = loss_ctc #+ 0.5 * loss_att
+            loss = loss_att
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
