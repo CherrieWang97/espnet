@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import random
 
 from chainer.datasets import TransformDataset
 from chainer import training
