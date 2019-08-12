@@ -122,8 +122,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2, _weight=self.ctc.ctc_lo.weight)
-        self.embed.weight = self.ctc.ctc_lo.weight
+        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2)
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -139,7 +138,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
-                if 'tenc.enc' in n or 'trgdec' in n or 'trgatt' in n:
+                if 'tenc.enc' in n or 'trgdec' in n or 'trgatt' in n or 'embed' in n:
                     if n in param_dict.keys() and p.size() == param_dict[n].size():
                         p.data = param_dict[n].data
                         logging.warning('Overwrite %s from mt model' % n)
@@ -256,13 +255,19 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 3. attention loss
         if task == "asr":
-            #loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
-            loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
-            loss = loss_att
+            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
+            act = self.ctc.argmax(hs_pad)
+            hs_embed = self.embed(act)
+            mse_fn = torch.nn.MSELoss()
+            loss_mse = mse_fn(hs_pad, hs_embed)
+            loss_mse *= hs_embed.size(1)
+            #loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            acc = 0
+            loss = loss_ctc + loss_mse
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
-            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 1, tgt_lang_ids=tgt_lang_ids)
+            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 0, tgt_lang_ids=tgt_lang_ids)
             self.stacc = acc
             self.stloss = float(loss)
         else:
@@ -305,7 +310,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 1. encoder
         hs, hlens, _ = self.senc(hs, hlens)
-        #hs, _, _ = self.tenc(hs, hlens)
+        hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
@@ -316,7 +321,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 2. Decoder
         # decode the first utterance
-        y = self.srcdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
+        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
 
         if prev:
             self.train()
