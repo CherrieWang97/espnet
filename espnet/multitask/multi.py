@@ -52,7 +52,7 @@ from espnet.asr.pytorch_backend.asr import load_trained_model
 from espnet.asr.pytorch_backend.asr import CustomConverter as ASRConverter
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTConverter
 
-from espnet.nets.pytorch_backend.e2e_multitask import E2E
+from espnet.nets.pytorch_backend.e2e_multi_transformer import E2E
 import matplotlib
 matplotlib.use('Agg')
 
@@ -144,21 +144,20 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
-        if self.iteration % 1000 < 600:
-            batch = st_iter.next()
-            x = self.converter(batch, self.device)
-            loss = self.model(*x).mean()
-        elif self.iteration % 1000 >= 800:
-            batch = asr_iter.next()
-            x = self.converter(batch, self.device)
-            loss = self.model(*x, task="asr").mean()
-        else:
-            batch = mt_iter.next()
-            xs, ilens, ys = batch[0]
-            xs = xs.to(self.device)
-            ilens = ilens.to(self.device)
-            ys = ys.to(self.device)
-            loss = self.model(xs, ilens, ys, task="mt").mean()
+        batch = st_iter.next()
+        x = self.converter(batch, self.device)
+        loss = self.model(*x).mean()
+        #elif self.iteration % 3 == 1:
+        #    batch = asr_iter.next()
+        #    x = self.converter(batch, self.device)
+        #    loss = self.model(*x, task="asr").mean()
+        #else:
+        #    batch = mt_iter.next()
+        #    xs, ilens, ys = batch[0]
+        #    xs = xs.to(self.device)
+        #    ilens = ilens.to(self.device)
+        #    ys = ys.to(self.device)
+        #    loss = self.model(xs, ilens, ys, task="mt").mean()
         if math.isnan(float(loss)) or float(loss) > 10000.0:
             return
         loss.backward()
@@ -196,16 +195,16 @@ def train(args):
     asr_model, mt_model = None, None
     # Initialize encoder with pre-trained ASR encoder
     if args.asr_model:
-        asr_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
+        asr_model = E2E(idim, args.src_vocab, args.trg_vocab, args)
         torch_load(args.asr_model, asr_model)
 
     # Initialize decoder with pre-trained MT decoder
     if args.mt_model:
-        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
+        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args)
         torch_load(args.mt_model, mt_model)
 
     # specify model architecture
-    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
+    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model)
 
     subsampling_factor = model.subsample[0]
 
@@ -388,7 +387,7 @@ def train(args):
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/stloss', 'main/stacc','validation/main/stloss', 
                      'validation/main/stacc', 'main/asrloss', 'main/asracc', 
-                      'main/ppl',
+                      'main/mtloss',
                    'elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(

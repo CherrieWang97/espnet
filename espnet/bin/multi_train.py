@@ -82,9 +82,9 @@ def get_parser():
     parser.add_argument('--senctype', default='vggblstm', type=str,
                         help='Type of encoder network architecture (VGG is not supported for NMT)')
     parser.add_argument('--tenctype', default='blstm', type=str)
-    parser.add_argument('--senclayers', default=4, type=int,
+    parser.add_argument('--elayers', default=4, type=int,
                         help='Number of encoder layers')
-    parser.add_argument('--tenclayers', default=4, type=int,
+    parser.add_argument('--dlayers', default=4, type=int,
                         help='Number of encoder layers for mt')
     parser.add_argument('--eunits', '-u', default=1024, type=int,
                         help='Number of encoder hidden units')
@@ -116,9 +116,9 @@ def get_parser():
     parser.add_argument('--dtype', default='lstm', type=str,
                         choices=['lstm', 'gru'],
                         help='Type of decoder network architecture')
-    parser.add_argument('--srcdlayers', default=1, type=int,
-                        help='Number of decoder layers')
-    parser.add_argument('--trgdlayers', default=2, type=int)
+    #parser.add_argument('--srcdlayers', default=1, type=int,
+    #                    help='Number of decoder layers')
+    #parser.add_argument('--trgdlayers', default=2, type=int)
     parser.add_argument('--dunits', default=1024, type=int,
                         help='Number of decoder hidden units')
     parser.add_argument('--lsm-type', const='', default='', type=str, nargs='?', choices=['', 'unigram'],
