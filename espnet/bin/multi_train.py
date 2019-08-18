@@ -57,6 +57,11 @@ def get_parser():
                         help='Verbose option')
     parser.add_argument('--tensorboard-dir', default=None, type=str, nargs='?', help="Tensorboard log dir path")
     # task related
+    parser.add_argument('--ctc_type', default='warpctc', type=str,
+                        choices=['builtin', 'warpctc'],
+                        help='Type of CTC implementation to calculate loss.')
+    parser.add_argument('--ctc-weight', default=0.3, type=float,
+                        help='CTC weight in joint decoding')
     parser.add_argument('--train-src', type=str, default=None,
                         help='Filename of train label data (json)')
     parser.add_argument('--train-trg', type=str, default=None,

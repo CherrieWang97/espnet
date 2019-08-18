@@ -208,7 +208,7 @@ def get_parser():
     parser.add_argument('--context-residual', default='', nargs='?',
                         help='')
     # multilingual NMT related
-    parser.add_argument('--replace-sos', default=True, nargs='?',
+    parser.add_argument('--replace-sos', default=False, nargs='?',
                         help='Replace <sos> in the decoder with a target language ID \
                               (the first token in the target sequence)')
 
@@ -263,12 +263,16 @@ def main(cmd_args):
             entry = entry.decode('utf-8').split(' ')
             word = entry[0]
             char_list.append(word)
-        char_list.append("<en>")
-        char_list.append("<de>")
-        args.src_id = char_list.index("<en>")
-        args.trg_id = char_list.index("<de>")
+        if args.replace_sos:
+            char_list.append("<en>")
+            char_list.append("<de>")
+            args.src_id = 10001
+            args.trg_id = char_list.index("<de>")
+            args.vocab_size += 2
+        else:
+            args.src_id = 1
+            args.trg_id = 1
         args.char_list = char_list
-        args.vocab_size += 2
         assert args.vocab_size == len(args.char_list)
     else:
         args.char_list = None

@@ -14,7 +14,7 @@ ngpu=1          # number of gpus ("0" uses cpu, otherwise use gpu)
 debugmode=1
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
-resume=         # Resume the training from snapshot
+resume= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc/results/snapshot.ep.25000         # Resume the training from snapshot
 seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
@@ -26,8 +26,8 @@ decode_config=conf/decode.yaml
 recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.best' or 'model.loss.best'
 
 # pre-training related
-asr_model=/hdfs/resrchvc/v-chengw/iwslt18/exp4asr/asr_vgg_500/results/model.acc.best
-mt_model=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/model.acc.best
+asr_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc_char/results/model.acc.best
+mt_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/mt_char2char_finetune/results/snapshot.ep.50000
 
 # preprocessing related
 case=lc
@@ -38,8 +38,8 @@ case=lc
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-st_ted=/hdfs/resrchvc/v-chengw/iwslt18/data
-dumpdir=/hdfs/resrchvc/v-chengw/iwslt18/data4st/dump    # directory to dump full features
+st_ted=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data
+dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st    # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -59,19 +59,19 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="dev.de test.de dev2010.de tst2010.de tst2013.de tst2014.de tst2015.de"
+recog_set="tst2013.de"
 
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
 feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
 
-dict=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_de.txt
+dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_char.txt
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=multitask
+expname=premtl_c2c
 
-expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4st/${expname}
+expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
 mkdir -p exp
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
@@ -90,13 +90,15 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/data_newsubword.json \
-        --valid-json ${feat_dt_dir}/data_newsubword.json \
-        --asr-json /hdfs/resrchvc/v-chengw/iwslt18/data4asr/dump/train/deltafalse/data_newsubword.json \
-        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.en.id \
-        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/allTed/train/train.de.id \
+        --src_vocab 115 \
+        --trg_vocab 140 \
+        --train-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/train/data_newchar.json \
+        --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_newchar.json \
+        --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_newchar.json \
+        --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.en.char.id \
+        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.de.char.id \
         --asr-model ${asr_model} \
-        --mt-model ${mt_model} 
+        --mt-model ${mt_model}
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
@@ -118,7 +120,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p ${expdir}/${decode_dir}
 
         ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
+            multi_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
@@ -131,7 +133,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}
         else
             set=$(echo ${rtask} | cut -f -1 -d ".")
-            local/score_bleu_reseg.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
+            local/score_bleu_reseg.sh --bpemodel /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_de.model ${expdir}/${decode_dir} ${dict} ${st_ted} ${set}
         fi
     ) &
     pids+=($!) # store background pids

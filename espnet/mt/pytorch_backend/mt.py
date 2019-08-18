@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import random
 
 from chainer.datasets import TransformDataset
 from chainer import training
@@ -83,10 +84,25 @@ class CustomConverter(object):
 
         return xs, ilens, ys
 
-    def transform(self, batch):
+    def transform(self, batch, add_noise=False):
         src = []
         tgt = []
         lens = []
+        if add_noise:
+            new_batch = []
+            for item in batch:
+                xs, ys = item
+                ilen = len(xs)
+                xs_n = []
+                i = 0
+                while i < ilen:
+                    xs_n.append(xs[i])
+                    if random.random() > 0.55:
+                        i += 1
+                xs = np.asarray(xs_n)
+                new_batch.append((xs, ys))
+            new_batch.sort(key=lambda x: -len(x[0]))
+            batch = new_batch
         for item in batch:
             xs, ys = item
             ilens = len(xs)

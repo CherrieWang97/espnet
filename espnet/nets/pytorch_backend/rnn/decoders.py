@@ -1,5 +1,6 @@
 from distutils.version import LooseVersion
 import logging
+import pdb
 import random
 import six
 
@@ -284,7 +285,7 @@ class Decoder(torch.nn.Module):
         else:
             hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a}
         if lpz is not None:
-            ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), 0, self.eos, np)
+            ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), 5000, self.eos, np)
             hyp['ctc_state_prev'] = ctc_prefix_score.initial_state()
             hyp['ctc_score_prev'] = 0.0
             if ctc_weight != 1.0:

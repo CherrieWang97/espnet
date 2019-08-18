@@ -371,6 +371,9 @@ def torch_load(path, model):
         model.module.load_state_dict(model_state_dict)
     else:
         model.load_state_dict(model_state_dict)
+    if hasattr(model, 'ctc'):
+        model.ctc.ctc_lo.weight.data = model_state_dict['ctc.ctc_lo.weight'].data
+        model.ctc.ctc_lo.weight.data = model.ctc.ctc_lo.weight.data.to(model.srcdec.embed.weight.device)
 
     del model_state_dict
 
@@ -473,6 +476,8 @@ def add_results_to_json(js, nbest_hyps, char_list):
             if 'text' in out_dic.keys():
                 logging.info('groundtruth: %s' % out_dic['text'])
             logging.info('prediction : %s' % out_dic['rec_text'])
+            logging.info('token id: %s' % out_dic['rec_tokenid'])
+       
 
     return new_js
 

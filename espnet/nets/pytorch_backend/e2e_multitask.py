@@ -6,6 +6,7 @@
 
 from __future__ import division
 import argparse
+import pdb
 import logging
 import math
 import os
@@ -56,7 +57,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
     """
 
-    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None):
+    def __init__(self, idim, src_vocab_size, trg_vocab_size, args, asr_model=None, mt_model=None, st_model=None, bias=True):
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
         self.senctype = args.senctype   #speech encoder type
@@ -106,11 +107,12 @@ class E2E(ASRInterface, torch.nn.Module):
         self.srcatt = att_for(args)
         self.trgatt = att_for(args, 2)
         # decoder
-        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, self.sos, self.eos, self.srcatt,
+        self.srcdec = Decoder(args.eprojs, src_vocab_size, args.dtype, args.srcdlayers, args.dunits, 0, 0, self.srcatt,
                                 args.verbose,
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos)
+        self.ctc = ctc_for(args, src_vocab_size, bias=bias)
         if args.share_dict:
             embed = self.srcdec.embed
         else:
@@ -120,7 +122,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                 args.char_list, labeldist,
                                 args.lsm_weight, args.sampling_probability, args.dropout_rate_decoder,
                                 args.context_residual, args.replace_sos, embed=embed)
-        self.embed = self.srcdec.embed
+        self.embed = torch.nn.Embedding(src_vocab_size, args.eunits, padding_idx=2)
         self.dropout_emb = self.srcdec.dropout_emb
 
         # weight initialization
@@ -128,28 +130,19 @@ class E2E(ASRInterface, torch.nn.Module):
         if asr_model is not None:
             param_dict = dict(asr_model.named_parameters())
             for n, p in self.named_parameters():
-                asr_n = n.lstrip('s')
-                if 'senc.enc' in n and asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    p.data = param_dict[asr_n].data
-                    logging.warning('Overwrite %s' % n)
-                asr_n = n.lstrip('src')
-                if asr_n in param_dict.keys() and p.size() == param_dict[asr_n].size():
-                    if 'srcdec' in n or 'srcatt' in n:
-                        p.data = param_dict[asr_n].data
-                        logging.warning('Overwrite %s' % n)
-           
+                if 'senc.enc' in n or 'ctc' in n or 'srcdec' in n or 'srcatt' in n:
+                    if n in param_dict.keys() and p.size() == param_dict[n].size():
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s from asr model' % n)
+
         if mt_model is not None:
             param_dict = dict(mt_model.named_parameters())
             for n, p in self.named_parameters():
-                mt_enc_n = n.lstrip('t')
-                if 'tenc.enc' in n and mt_enc_n in param_dict.keys() and p.size() == param_dict[mt_enc_n].size():
-                    p.data = param_dict[mt_enc_n].data
-                    logging.warning('Overwrite %s' % n)
-                mt_dec_n = n.lstrip('trg')
-                if mt_dec_n in param_dict.keys() and p.size() == param_dict[mt_dec_n].size():
-                    if 'trgdec' in n or 'trgatt.0' in n:
-                        p.data = param_dict[mt_dec_n].data
-                        logging.warning('Overwrite %s' % n)
+                if 'tenc.enc' in n or 'trgdec' in n or 'trgatt' in n or 'embed' in n:
+                    if n in param_dict.keys() and p.size() == param_dict[n].size():
+                        p.data = param_dict[n].data
+                        logging.warning('Overwrite %s from mt model' % n)
+
         if st_model is not None:
             param_dict = dict(st_model.named_parameters())
             for n, p in self.named_parameters():
@@ -252,19 +245,29 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             tgt_lang_ids = None
 
-        if task == "st" or task == "asr":
+        if task == "asr":
             hs_pad, hlens, _ = self.senc(hs_pad, hlens)
-        else:
+        elif task == "mt":
             hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
-
+        else:
+            hs_pad, hlens, _ = self.senc(hs_pad, hlens)
+            hs_pad, hlens, _ = self.tenc(hs_pad, hlens)
 
         # 3. attention loss
         if task == "asr":
-            loss, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
+            act = self.ctc.argmax(hs_pad)
+            hs_embed = self.embed(act)
+            mse_fn = torch.nn.MSELoss()
+            loss_mse = mse_fn(hs_pad, hs_embed)
+            loss_mse *= hs_embed.size(1)
+            #loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+            acc = 0
+            loss = loss_ctc + loss_mse
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":
-            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 1, tgt_lang_ids=tgt_lang_ids)
+            loss, acc, ppl = self.trgdec(hs_pad, hlens, ys_pad, 0, tgt_lang_ids=tgt_lang_ids)
             self.stacc = acc
             self.stloss = float(loss)
         else:
@@ -306,17 +309,19 @@ class E2E(ASRInterface, torch.nn.Module):
             hs, hlens = hs, ilens
 
         # 1. encoder
-        hs, _, _ = self.senc(hs, hlens)
+        hs, hlens, _ = self.senc(hs, hlens)
+        hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
         if recog_args.ctc_weight > 0.0:
             lpz = self.ctc.log_softmax(hs)[0]
         else:
             lpz = None
+        act = self.ctc.argmax(hs)
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=1)
+        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
 
         if prev:
             self.train()

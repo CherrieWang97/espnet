@@ -71,7 +71,7 @@ class ASRConverter(object):
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
 
-    def __call__(self, batch, device, lang_id=10001):
+    def __call__(self, batch, device, lang_id):
         """Transforms a batch and send it to a device
 
         :param list batch: The batch to transform
@@ -254,7 +254,6 @@ class ASRUpdater(training.StandardUpdater):
             x = self.converter(batch, self.device, self.trg_id)
         loss = self.model(*x, task=self.task).mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -302,11 +301,11 @@ class CustomUpdater(training.StandardUpdater):
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
-        if self.iteration % 1000 < 600:
+        if self.iteration % 1000 < 200:
             batch = st_iter.next()
             x = self.converter(batch, self.device, self.trg_id)
             loss = self.model(*x).mean()
-        elif self.iteration % 1000 >=  800:
+        elif self.iteration % 1000 >=  600:
             batch = asr_iter.next()
             x = self.converter(batch, self.device, self.src_id)
             loss = self.model(*x, task="asr").mean()
@@ -318,7 +317,6 @@ class CustomUpdater(training.StandardUpdater):
             ys = ys.to(self.device)
             loss = self.model(xs, ilens, ys, task="mt").mean()
         loss.backward()
-        self.iteration += 1
 
         # compute the gradient norm to check if it is normal or not
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -354,11 +352,11 @@ def train(args):
     # Initialize encoder with pre-trained ASR encoder
       
     if args.asr_model:
-        asr_model = E2E(idim, args.vocab_size, args)
-        torch_load(args.asr_model, asr_model) 
+        asr_model, _ = load_trained_model(args.asr_model)
+        #torch_load(args.asr_model, asr_model) 
     if args.mt_model:
-        mt_model = E2E(idim, args.vocab_size, args)
-        torch_load(args.mt_model, mt_model)    
+        mt_model, _ = load_trained_model(args.mt_model)
+        #torch_load(args.mt_model, mt_model)    
     # specify model architecture
     model = E2E(idim, args.vocab_size, args, asr_model=asr_model, mt_model=mt_model)
     assert isinstance(model, ASRInterface)
@@ -536,10 +534,10 @@ def train(args):
     trainer.extend(extensions.PlotReport(['main/' + accname, 'validation/main/' + accname],
                                          'iteration', file_name=accname + '.png'), trigger=(5000, 'iteration'))
     trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/' + lossname))
+                   trigger=training.triggers.MinValueTrigger('validation/main/' + lossname, trigger=(5000, 'iteration')))
 
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/' + accname))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/' + accname, trigger=(5000, 'iteration')))
         
 
     # save snapshot which contains model and optimizer states
@@ -551,11 +549,11 @@ def train(args):
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
             trainer.extend(adadelta_eps_decay(args.eps_decay),
                            trigger=CompareValueTrigger(
                                'validation/main/' + accname,
-                               lambda best_value, current_value: best_value > current_value))
+                               lambda best_value, current_value: best_value > current_value, trigger=(5000, 'iteration')))
         elif args.criterion == 'loss':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
                            trigger=CompareValueTrigger(
