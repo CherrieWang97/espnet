@@ -71,8 +71,8 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # below means the last number becomes eos/sos ID
         # note that sos/eos IDs are identical
-        self.sos = 1
-        self.eos = 2
+        self.sos = 0
+        self.eos = 0
 
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
@@ -310,23 +310,23 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 1. encoder
         hs, hlens, _ = self.senc(hs, hlens)
-        hs, _, _ = self.tenc(hs, hlens)
+        #hs, _, _ = self.tenc(hs, hlens)
 
         # calculate log P(z_t|X) for CTC scores
-        if recog_args.ctc_weight > 0.0:
-            lpz = self.ctc.log_softmax(hs)[0]
-        else:
-            lpz = None
+        #if recog_args.ctc_weight > 0.0:
+        #    lpz = self.ctc.log_softmax(hs)[0]
+        #else:
+        #    lpz = None
         act = self.ctc.argmax(hs)
 
         # 2. Decoder
         # decode the first utterance
-        y = self.trgdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
+        #y = self.srcdec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm, strm_idx=0)
 
         if prev:
             self.train()
 
-        return y
+        return act
 
     def recognize_batch(self, xs, recog_args, char_list, rnnlm=None):
         """E2E beam search

@@ -52,7 +52,7 @@ from espnet.asr.pytorch_backend.asr import load_trained_model
 from espnet.asr.pytorch_backend.asr import CustomConverter as ASRConverter
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTConverter
 
-from espnet.nets.pytorch_backend.e2e_multi_transformer import E2E
+from espnet.nets.pytorch_backend.e2e_multitask import E2E
 import matplotlib
 matplotlib.use('Agg')
 
@@ -421,14 +421,25 @@ def recog(args):
     else:
         st_model = None
   
-    model = E2E(idim, src_vocab+1, trg_vocab, train_args, st_model=st_model,bias=False)
+    model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model,bias=False)
     torch_load(args.model, model)
     if args.st_model:
         del st_model
     assert isinstance(model, ASRInterface)
     model.recog_args = args
 
-    train_args.char_list.append("<blank>")
+    if args.char_list is not None:
+        char_list = []
+        with open(args.char_list, 'rb') as f:
+            dictionary = f.readlines()
+        for entry in dictionary:
+            entry = entry.decode('utf-8').split(' ')
+            word = entry[0]
+            char_list.append(word)
+    else:
+        char_list = train_args.char_list
+    char_list.insert(0, "<eos>")
+    char_list.append("<blank>")
 
     # read rnnlm
     rnnlm = None
@@ -444,6 +455,7 @@ def recog(args):
     with open(args.recog_json, 'rb') as f:
         js = json.load(f)['utts']
     new_js = {}
+    results = []
     load_inputs_and_targets = LoadInputsAndTargets(
         mode='asr', load_output=False, sort_in_input_length=False,
         preprocess_conf=train_args.preprocess_conf
@@ -475,7 +487,7 @@ def recog(args):
                     for i in range(0, feat.shape[0], r):
                         hyps = se2e.accept_input(feat[i:i + r])
                         if hyps is not None:
-                            text = ''.join([train_args.char_list[int(x)]
+                            text = ''.join([char_list[int(x)]
                                             for x in hyps[0]['yseq'][1:-1] if int(x) != -1])
                             text = text.replace('\u2581', ' ').strip()  # for SentencePiece
                             text = text.replace(model.space, ' ')
@@ -485,8 +497,9 @@ def recog(args):
                                 nbest_hyps[n]['yseq'].extend(hyps[n]['yseq'])
                                 nbest_hyps[n]['score'] += hyps[n]['score']
                 else:
-                    nbest_hyps = model.recognize(feat, args, train_args.char_list, rnnlm)
-                new_js[name] = add_results_to_json(js[name], nbest_hyps, train_args.char_list)
+                    nbest_hyps = model.recognize(feat, args, char_list, rnnlm)
+                results.append(nbest_hyps[0])
+                #new_js[name] = add_results_to_json(js[name], nbest_hyps, char_list)
 
     else:
         def grouper(n, iterable, fillvalue=None):
@@ -509,9 +522,13 @@ def recog(args):
                 for i, nbest_hyp in enumerate(nbest_hyps):
                     name = names[i]
                     new_js[name] = add_results_to_json(js[name], nbest_hyp, train_args.char_list)
+    with open(args.result_label, 'w', encoding='utf-8') as f:
+        for r in results:
+            f.write(' '.join(list(map(str, np.asarray(r.cpu()))))+"\n")
 
-    with open(args.result_label, 'wb') as f:
-        f.write(json.dumps({'utts': new_js}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
+
+    #with open(args.result_label, 'wb') as f:
+    #    f.write(json.dumps({'utts': new_js}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
 
 
 def enhance(args):

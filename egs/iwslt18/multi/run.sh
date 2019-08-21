@@ -19,7 +19,7 @@ seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
 
-train_config=conf/train_trans.yaml
+train_config=conf/train.yaml
 decode_config=conf/decode.yaml
 
 # decoding parameter
@@ -69,7 +69,7 @@ dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_char.t
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=transformer_st
+expname=asr_ctc_char
 
 expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
