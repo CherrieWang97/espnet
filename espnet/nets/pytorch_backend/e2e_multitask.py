@@ -256,14 +256,9 @@ class E2E(ASRInterface, torch.nn.Module):
         # 3. attention loss
         if task == "asr":
             loss_ctc = self.ctc(hs_pad, hlens, ys_pad)
-            act = self.ctc.argmax(hs_pad)
-            hs_embed = self.embed(act)
-            mse_fn = torch.nn.MSELoss()
-            loss_mse = mse_fn(hs_pad, hs_embed)
-            loss_mse *= hs_embed.size(1)
             #loss_att, acc, ppl = self.srcdec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
             acc = 0
-            loss = loss_ctc + loss_mse
+            loss = loss_ctc
             self.asracc = acc
             self.asrloss = float(loss)
         elif task == "st":

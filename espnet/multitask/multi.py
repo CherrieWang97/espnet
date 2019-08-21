@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import sys
+import random
 
 from chainer.datasets import TransformDataset
 from chainer import reporter as reporter_module
@@ -52,7 +53,7 @@ from espnet.asr.pytorch_backend.asr import load_trained_model
 from espnet.asr.pytorch_backend.asr import CustomConverter as ASRConverter
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTConverter
 
-from espnet.nets.pytorch_backend.e2e_multi_transformer import E2E
+from espnet.nets.pytorch_backend.e2e_multitask import E2E
 import matplotlib
 matplotlib.use('Agg')
 
@@ -143,21 +144,23 @@ class CustomUpdater(training.StandardUpdater):
         mt_iter = self.get_iterator('mt')
         optimizer = self.get_optimizer('main')
 
+        alpha = random.random()
         # Get the next batch ( a list of json files)
-        batch = st_iter.next()
-        x = self.converter(batch, self.device)
-        loss = self.model(*x).mean()
-        #elif self.iteration % 3 == 1:
-        #    batch = asr_iter.next()
-        #    x = self.converter(batch, self.device)
-        #    loss = self.model(*x, task="asr").mean()
-        #else:
-        #    batch = mt_iter.next()
-        #    xs, ilens, ys = batch[0]
-        #    xs = xs.to(self.device)
-        #    ilens = ilens.to(self.device)
-        #    ys = ys.to(self.device)
-        #    loss = self.model(xs, ilens, ys, task="mt").mean()
+        if alpha < 0.6: 
+            batch = st_iter.next()
+            x = self.converter(batch, self.device)
+            loss = self.model(*x).mean()
+        elif alpha > 0.8:
+            batch = asr_iter.next()
+            x = self.converter(batch, self.device)
+            loss = self.model(*x, task="asr").mean()
+        else:
+            batch = mt_iter.next()
+            xs, ilens, ys = batch[0]
+            xs = xs.to(self.device)
+            ilens = ilens.to(self.device)
+            ys = ys.to(self.device)
+            loss = self.model(xs, ilens, ys, task="mt").mean()
         if math.isnan(float(loss)) or float(loss) > 10000.0:
             return
         loss.backward()
@@ -195,16 +198,16 @@ def train(args):
     asr_model, mt_model = None, None
     # Initialize encoder with pre-trained ASR encoder
     if args.asr_model:
-        asr_model = E2E(idim, args.src_vocab, args.trg_vocab, args)
+        asr_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
         torch_load(args.asr_model, asr_model)
 
     # Initialize decoder with pre-trained MT decoder
     if args.mt_model:
-        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args)
+        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
         torch_load(args.mt_model, mt_model)
 
     # specify model architecture
-    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model)
+    model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
 
     subsampling_factor = model.subsample[0]
 

@@ -19,15 +19,15 @@ seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
 
-train_config=conf/train_trans.yaml
+train_config=conf/train.yaml
 decode_config=conf/decode.yaml
 
 # decoding parameter
 recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.best' or 'model.loss.best'
 
 # pre-training related
-asr_model= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc_char/results/model.acc.best
-mt_model= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/mt_char2char_finetune/results/snapshot.ep.50000
+asr_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc_char/results/model.acc.best
+mt_model=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/mt_char2char_finetune/results/snapshot.ep.50000
 
 # preprocessing related
 case=lc
@@ -69,7 +69,7 @@ dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_char.t
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=transformer_st
+expname=char_mtl_noshare
 
 expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
@@ -96,7 +96,9 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --valid-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st/dev.de/deltafalse/data_newchar.json \
         --asr-json /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/train/deltafalse/data_newchar.json \
         --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.en.char.id \
-        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.de.char.id 
+        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/train.de.char.id \
+        --asr-model ${asr_model} \
+        --mt-model ${mt_model}
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
