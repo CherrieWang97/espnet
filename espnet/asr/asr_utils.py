@@ -423,16 +423,16 @@ def parse_hypothesis(hyp, char_list):
     :return: recognition tokenid string
     """
     # remove sos and get results
-    tokenid_as_list = list(map(int, hyp['yseq'][1:]))
+    tokenid_as_list = list(map(int, hyp))
     token_as_list = [char_list[idx] for idx in tokenid_as_list]
-    score = float(hyp['score'])
+    #score = float(hyp['score'])
 
     # convert to string
     tokenid = " ".join([str(idx) for idx in tokenid_as_list])
     token = " ".join(token_as_list)
-    text = "".join(token_as_list).replace('<space>', ' ')
+    #text = "".join(token_as_list).replace('<space>', ' ')
 
-    return text, token, tokenid, score
+    return token, tokenid
 
 
 def add_results_to_json(js, nbest_hyps, char_list):
@@ -448,35 +448,36 @@ def add_results_to_json(js, nbest_hyps, char_list):
     new_js['utt2spk'] = js['utt2spk']
     new_js['output'] = []
 
-    for n, hyp in enumerate(nbest_hyps, 1):
+    #for n, hyp in enumerate(nbest_hyps, 1):
         # parse hypothesis
-        rec_text, rec_token, rec_tokenid, score = parse_hypothesis(hyp, char_list)
+    hyp = nbest_hyps
+    rec_token, rec_tokenid = parse_hypothesis(hyp, char_list)
 
         # copy ground-truth
-        if len(js['output']) > 0:
-            out_dic = dict(js['output'][0].items())
-        else:
-            # for no reference case (e.g., speech translation)
-            out_dic = {'name': ''}
+    if len(js['output']) > 0:
+        out_dic = dict(js['output'][0].items())
+    else:
+        # for no reference case (e.g., speech translation)
+        out_dic = {'name': ''}
 
         # update name
-        out_dic['name'] += '[%d]' % n
+    out_dic['name'] += '[%d]' % 0
 
-        # add recognition results
-        out_dic['rec_text'] = rec_text
-        out_dic['rec_token'] = rec_token
-        out_dic['rec_tokenid'] = rec_tokenid
-        out_dic['score'] = score
+    # add recognition results
+    #out_dic['rec_text'] = rec_text
+    out_dic['rec_token'] = rec_token
+    out_dic['rec_tokenid'] = rec_tokenid
+    #out_dic['score'] = score
 
-        # add to list of N-best result dicts
-        new_js['output'].append(out_dic)
+    # add to list of N-best result dicts
+    new_js['output'].append(out_dic)
 
         # show 1-best result
-        if n == 1:
-            if 'text' in out_dic.keys():
-                logging.info('groundtruth: %s' % out_dic['text'])
-            logging.info('prediction : %s' % out_dic['rec_text'])
-            logging.info('token id: %s' % out_dic['rec_tokenid'])
+    #if n == 1:
+        #if 'text' in out_dic.keys():
+            #logging.info('groundtruth: %s' % out_dic['text'])
+    logging.info('prediction : %s' % out_dic['rec_token'])
+    logging.info('token id: %s' % out_dic['rec_tokenid'])
        
 
     return new_js

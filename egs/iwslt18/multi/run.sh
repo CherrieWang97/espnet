@@ -39,7 +39,7 @@ case=lc
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
 st_ted=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data
-dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4st    # directory to dump full features
+dumpdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr    # directory to dump full features
 # st_ted=/n/sd3/inaguma/corpus/iwslt18/data
 
 # exp tag
@@ -59,7 +59,7 @@ set -o pipefail
 train_set=train_nodevtest_sp.de
 train_set_prefix=train_nodevtest_sp
 train_dev=dev.de
-recog_set="tst2013.de"
+recog_set="newdump"
 
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
@@ -101,31 +101,32 @@ fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     echo "stage 5: Decoding"
-    nj=16
+    nj=32
 
     pids=() # initialize pids
     for rtask in ${recog_set}; do
     (
         decode_dir=decode_${rtask}
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
+        feat_recog_dir=${dumpdir}/${rtask}
 
         # split data
         #splitjson.py --parts ${nj} ${feat_recog_dir}/data.${case}.json
 
         #### use CPU for decoding
-        ngpu=0
+        ngpu=1
         mkdir -p exp/${decode_dir}
         mkdir -p ${expdir}/${decode_dir}
 
-        ${decode_cmd} JOB=1:${nj} exp/${decode_dir}/log/decode.JOB.log \
-            multi_recog.py \
+        ${decode_cmd} JOB=1:2 exp/${decode_dir}/log/decode.JOB.log \
+            CUDA_VISIBLE_DEVICES=0 multi_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
             --batchsize 0 \
-            --recog-json ${feat_recog_dir}/split${nj}utt/data.JOB.json \
-            --result-label ${expdir}/${decode_dir}/data.JOB.json \
-            --model ${expdir}/results/${recog_model}
+            --recog-json ${feat_recog_dir}/split${nj}utt/data_uniq.JOB.json \
+            --result-label ${expdir}/${decode_dir}/data_uniq.JOB.json \
+            --model ${expdir}/results/${recog_model} \
+            --char-list /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/dict_char.txt
 
         if [ ${rtask} = "dev.de" ] || [ ${rtask} = "test.de" ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}

@@ -499,7 +499,7 @@ def recog(args):
                 else:
                     nbest_hyps = model.recognize(feat, args, char_list, rnnlm)
                 results.append(nbest_hyps[0])
-                #new_js[name] = add_results_to_json(js[name], nbest_hyps, char_list)
+                new_js[name] = add_results_to_json(js[name], nbest_hyps[0].cpu(), char_list)
 
     else:
         def grouper(n, iterable, fillvalue=None):
@@ -522,13 +522,13 @@ def recog(args):
                 for i, nbest_hyp in enumerate(nbest_hyps):
                     name = names[i]
                     new_js[name] = add_results_to_json(js[name], nbest_hyp, train_args.char_list)
-    with open(args.result_label, 'w', encoding='utf-8') as f:
+    with open(args.result_label +".txt", 'w', encoding='utf-8') as f:
         for r in results:
             f.write(' '.join(list(map(str, np.asarray(r.cpu()))))+"\n")
 
 
-    #with open(args.result_label, 'wb') as f:
-    #    f.write(json.dumps({'utts': new_js}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
+    with open(args.result_label + '.json', 'wb') as f:
+        f.write(json.dumps({'utts': new_js}, indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
 
 
 def enhance(args):
