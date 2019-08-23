@@ -64,6 +64,7 @@ def get_parser():
                         help='Filename of train label data (json)')
     parser.add_argument('--train-trg', type=str, default=None,
                         help="File name of target data")
+    parser.add_argument('--repeat', type=str, default=None)
     parser.add_argument('--valid-src', type=str, default=None,
                         help='Filename of validation label data (json)')
     parser.add_argument('--valid-trg', type=str, default=None,

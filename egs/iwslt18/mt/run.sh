@@ -15,7 +15,7 @@ debugmode=1
 dumpdir=dump    # directory to dump full features
 N=0             # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0       # verbose option
-resume= #/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/mt_ted/results/snapshot.ep.1         # Resume the training from snapshot
+resume= #/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4mt/seq2seq_char/results/snapshot.ep.5000       # Resume the training from snapshot
 seed=1          # seed to generate random number
 # feature configuration
 do_delta=false
@@ -37,7 +37,7 @@ bpemode=unigram
 
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.
-datadir=/hdfs/resrchvc/v-chengw/iwslt18/data4mt
+datadir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt
 # data4mt
 #  |_ train/
 #  |_ other/
@@ -65,11 +65,11 @@ train_dev=train_dev
 recog_set="dev"
 
 
-dict=/hdfs/resrchvc/v-chengw/iwslt18/data4mt/dict/ted_share.vocab
+dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/dict_char.txt
 # NOTE: skip stage 3: LM Preparation
 
-expname=mt_wmt_share
-expdir=/hdfs/resrchvc/v-chengw/iwslt18/exp4mt/${expname}
+expname=seq2seq_pred
+expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4mt/${expname}
 mkdir -p ${expdir}
 
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
@@ -86,16 +86,17 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --tensorboard-dir tensorboard/${expname} \
         --debugmode ${debugmode} \
         --dict-tgt ${dict} \
-        --tgt-vocab 10000 \
+        --tgt-vocab 115 \
         --debugdir ${expdir} \
         --minibatches ${N} \
         --seed ${seed} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/other/corpus.en.share.id \
-        --train-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/other/corpus.de.share.id \
-        --valid-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.share.id \
-        --valid-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.de.share.id
+        --train-src /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/newdata/train/tokenid.txt \
+        --train-trg /teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc_char/decode_newdump/data_clean.txt \
+        --repeat /teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/asr_ctc_char/decode_newdump/repeat.txt
+        #--valid-src /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.share.id \
+        #--valid-trg /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.de.share.id
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
@@ -120,7 +121,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --ngpu ${ngpu} \
             --backend ${backend} \
             --batchsize 0 \
-            --recog-path /hdfs/resrchvc/v-chengw/iwslt18/data4mt/st/dev/text.en.id\
+            --recog-path /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4asr/newdata/train/tokenid.txt \
             --result-label ${expdir}/${decode_dir}/result.txt \
             --model ${expdir}/results/${recog_model}
 

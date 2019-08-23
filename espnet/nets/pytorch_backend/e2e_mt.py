@@ -52,8 +52,8 @@ class E2E(MTInterface, torch.nn.Module):
 
         # below means the last number becomes eos/sos ID
         # note that sos/eos IDs are identical
-        self.sos = 1
-        self.eos = 2
+        self.sos = 0
+        self.eos = 0
         self.pad = self.eos
 
         # subsample info
@@ -138,7 +138,7 @@ class E2E(MTInterface, torch.nn.Module):
         for l in six.moves.range(len(self.dec.decoder)):
             set_forget_bias_to_one(self.dec.decoder[l].bias_ih)
 
-    def forward(self, xs_pad, ilens, ys_pad):
+    def forward(self, xs_pad, ilens, ys_pad, ys_lens):
         """E2E forward
         :param torch.Tensor xs_pad: batch of padded input sequences (B, Tmax, idim)
         :param torch.Tensor ilens: batch of lengths of input sequences (B)
@@ -153,7 +153,7 @@ class E2E(MTInterface, torch.nn.Module):
         else:
             hs_pad, hlens, _ = self.enc(self.embed_src(xs_pad), ilens)
         # 3. attention loss
-        loss, acc, ppl = self.dec(hs_pad, hlens, ys_pad, tgt_lang_ids=tgt_lang_ids)
+        loss, acc, ppl = self.dec(hs_pad, hlens, ys_pad, ys_lens, tgt_lang_ids=tgt_lang_ids)
         self.acc = acc
         self.ppl = ppl
 

@@ -1,8 +1,8 @@
 from distutils.version import LooseVersion
 import logging
-import pdb
 import random
 import six
+import pdb
 
 import numpy as np
 import torch
@@ -80,6 +80,7 @@ class Decoder(torch.nn.Module):
             self.output = torch.nn.Linear(dunits + eprojs, odim)
         else:
             self.output = torch.nn.Linear(dunits, odim)
+        self.len_predict = torch.nn.Linear(dunits + eprojs, 750)
 
         self.loss = None
         self.att = att
@@ -116,7 +117,7 @@ class Decoder(torch.nn.Module):
                 z_list[l] = self.decoder[l](self.dropout_dec[l - 1](z_list[l - 1]), z_prev[l])
         return z_list, c_list
 
-    def forward(self, hs_pad, hlens, ys_pad, strm_idx=0, tgt_lang_ids=None):
+    def forward(self, hs_pad, hlens, ys_pad, ys_lens, strm_idx=0, tgt_lang_ids=None):
         """Decoder forward
 
         :param torch.Tensor hs_pad: batch of padded hidden state sequences (B, Tmax, D)
@@ -131,6 +132,7 @@ class Decoder(torch.nn.Module):
         """
         # TODO(kan-bayashi): need to make more smart way
         ys = [y[y != self.ignore_id] for y in ys_pad]  # parse padded ys
+        ys_len = [y [y != self.ignore_id] for y in ys_lens]
         # attention index for the attention module
         # in SPA (speaker parallel attention), att_idx is used to select attention module. In other cases, it is 0.
         att_idx = min(strm_idx, len(self.att) - 1)
@@ -142,16 +144,18 @@ class Decoder(torch.nn.Module):
         # prepare input and output word sequences with sos/eos IDs
         eos = ys[0].new([self.eos])
         sos = ys[0].new([self.sos])
+        len_pad = ys[0].new([0])
         if self.replace_sos:
             ys_in = [torch.cat([idx, y], dim=0) for idx, y in zip(tgt_lang_ids, ys)]
         else:
             ys_in = [torch.cat([sos, y], dim=0) for y in ys]
         ys_out = [torch.cat([y, eos], dim=0) for y in ys]
-
+        ys_lens = [torch.cat([y, len_pad], dim=0) for y in ys_len]
         # padding for ys with -1
         # pys: utt x olen
         ys_in_pad = pad_list(ys_in, self.eos)
         ys_out_pad = pad_list(ys_out, self.ignore_id)
+        ys_lens = pad_list(ys_lens, self.ignore_id)
 
         # get dim, length info
         batch = ys_out_pad.size(0)
@@ -192,16 +196,23 @@ class Decoder(torch.nn.Module):
         z_all = torch.stack(z_all, dim=1).view(batch * olength, -1)
         # compute loss
         y_all = self.output(z_all)
+        len_pred = self.len_predict(z_all)
         if LooseVersion(torch.__version__) < LooseVersion('1.0'):
             reduction_str = 'elementwise_mean'
         else:
             reduction_str = 'mean'
-        self.loss = F.cross_entropy(y_all, ys_out_pad.view(-1),
+        self.loss_w = F.cross_entropy(y_all, ys_out_pad.view(-1),
                                     ignore_index=self.ignore_id,
                                     reduction=reduction_str)
+        self.loss_len = F.cross_entropy(len_pred, ys_lens.view(-1), 
+                                      ignore_index=self.ignore_id,
+                                      reduction=reduction_str)
+        self.loss = self.loss_w + self.loss_len 
         # -1: eos, which is removed in the loss computation
         self.loss *= (np.mean([len(x) for x in ys_in]) - 1)
         acc = th_accuracy(y_all, ys_out_pad, ignore_label=self.ignore_id)
+        acclen = th_accuracy(len_pred, ys_lens, ignore_label=self.ignore_id)
+
         logging.info('att loss:' + ''.join(str(self.loss.item()).split('\n')))
 
         # compute perplexity
@@ -230,7 +241,7 @@ class Decoder(torch.nn.Module):
             loss_reg = - torch.sum((F.log_softmax(y_all, dim=1) * self.vlabeldist).view(-1), dim=0) / len(ys_in)
             self.loss = (1. - self.lsm_weight) * self.loss + self.lsm_weight * loss_reg
 
-        return self.loss, acc, ppl
+        return self.loss, acclen, ppl
 
     def recognize_beam(self, h, lpz, recog_args, char_list, rnnlm=None, strm_idx=0):
         """beam search implementation
@@ -281,9 +292,9 @@ class Decoder(torch.nn.Module):
         # initialize hypothesis
         if rnnlm:
             hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list,
-                   'z_prev': z_list, 'a_prev': a, 'rnnlm_prev': None}
+                   'z_prev': z_list, 'a_prev': a, 'rnnlm_prev': None, 'lens': []}
         else:
-            hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a}
+            hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a, 'lens': []}
         if lpz is not None:
             ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), len(char_list)-1, self.eos, np)
             hyp['ctc_state_prev'] = ctc_prefix_score.initial_state()
@@ -295,6 +306,7 @@ class Decoder(torch.nn.Module):
                 ctc_beam = lpz.shape[-1]
         hyps = [hyp]
         ended_hyps = []
+        lens = []
 
         for i in six.moves.range(maxlen):
             logging.debug('position ' + str(i))
@@ -313,6 +325,8 @@ class Decoder(torch.nn.Module):
                 # get nbest local scores and their ids
                 if self.context_residual:
                     logits = self.output(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1))
+                    r_len = torch.argmax(self.len_predict(torch.cat((self.dropout_dec[-1](z_list[-1]), att_c), dim=-1))).cpu()
+                    lens.append(r_len)
                 else:
                     logits = self.output(self.dropout_dec[-1](z_list[-1]))
                 local_att_scores = F.log_softmax(logits, dim=1)
@@ -340,6 +354,9 @@ class Decoder(torch.nn.Module):
                 for j in six.moves.range(beam):
                     new_hyp = {}
                     # [:] is needed!
+                    new_hyp['lens'] = []
+                    new_hyp['lens'].extend(hyp['lens'])
+                    new_hyp['lens'].append(r_len)
                     new_hyp['z_prev'] = z_list[:]
                     new_hyp['c_prev'] = c_list[:]
                     new_hyp['a_prev'] = att_w[:]

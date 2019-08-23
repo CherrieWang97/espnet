@@ -77,21 +77,23 @@ class CustomConverter(object):
         """
         # batch should be located in list
         assert len(batch) == 1
-        xs, ilens, ys = batch[0]
+        xs, ilens, ys, ys_lens = batch[0]
         xs = xs.to(device)
         ys = ys.to(device)
         ilens = ilens.to(device)
+        ys_lens = ys_lens.to(device)
 
-        return xs, ilens, ys
+        return xs, ilens, ys, ys_lens
 
     def transform(self, batch, add_noise=False):
         src = []
         tgt = []
         lens = []
+        tgt_len = []
         if add_noise:
             new_batch = []
             for item in batch:
-                xs, ys = item
+                xs, ys, rs = item
                 ilen = len(xs)
                 xs_n = []
                 i = 0
@@ -100,22 +102,24 @@ class CustomConverter(object):
                     if random.random() > 0.55:
                         i += 1
                 xs = np.asarray(xs_n)
-                new_batch.append((xs, ys))
+                new_batch.append((xs, ys, rs))
             new_batch.sort(key=lambda x: -len(x[0]))
             batch = new_batch
         for item in batch:
-            xs, ys = item
+            xs, ys, rs = item
             ilens = len(xs)
             src.append(xs)
             tgt.append(ys)
+            tgt_len.append(rs)
             lens.append(ilens)
 
         # perform padding and convert to tensor
         xs_pad = pad_list([torch.from_numpy(x).long() for x in src], self.pad)
         lens = torch.from_numpy(np.array(lens))
         ys_pad = pad_list([torch.from_numpy(y).long() for y in tgt], self.ignore_id)
+        rs_pad = pad_list([torch.from_numpy(l).long() for l in tgt_len], self.ignore_id)
 
-        return xs_pad, lens, ys_pad
+        return xs_pad, lens, ys_pad, rs_pad
 
 def train(args):
     """Train with the given args
@@ -190,8 +194,8 @@ def train(args):
 
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
-    train = make_mtbatchset(args.train_src, args.train_trg, args.batch_size)
-    valid = make_mtbatchset(args.valid_src, args.valid_trg, args.batch_size)
+    train = make_mtbatchset(args.train_src, args.train_trg, args.repeat, args.batch_size)
+    #valid = make_mtbatchset(args.valid_src, args.valid_trg, args.batch_size)
 
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
@@ -200,17 +204,17 @@ def train(args):
             TransformDataset(train, converter.transform),
             batch_size=1, n_processes=args.n_iter_processes, n_prefetch=8, maxtasksperchild=20,
             shuffle=not use_sortagrad)
-        valid_iter = ToggleableShufflingMultiprocessIterator(
-            TransformDataset(valid, converter.transform),
-            batch_size=1, repeat=False, shuffle=False,
-            n_processes=args.n_iter_processes, n_prefetch=8, maxtasksperchild=20)
+        #valid_iter = ToggleableShufflingMultiprocessIterator(
+        #    TransformDataset(valid, converter.transform),
+        #    batch_size=1, repeat=False, shuffle=False,
+        #    n_processes=args.n_iter_processes, n_prefetch=8, maxtasksperchild=20)
     else:
         train_iter = ToggleableShufflingSerialIterator(
             TransformDataset(train, converter.transform),
             batch_size=1, shuffle=not use_sortagrad)
-        valid_iter = ToggleableShufflingSerialIterator(
-            TransformDataset(valid, converter.transform),
-            batch_size=1, repeat=False, shuffle=False)
+        #valid_iter = ToggleableShufflingSerialIterator(
+        #    TransformDataset(valid, converter.transform),
+        #    batch_size=1, repeat=False, shuffle=False)
     # Set up a trainer
     updater = CustomUpdater(
         model, args.grad_clip, train_iter, optimizer, converter, device, args.ngpu)
@@ -227,28 +231,29 @@ def train(args):
         torch_load(args.resume, model)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
+    #trainer.extend(CustomEvaluator(model, valid_iter, reporter, converter, device))
     
 
     # Make a plot for training and validation values
-    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
-                                          'main/loss_att', 'validation/main/loss_att'],
-                                         'epoch', file_name='loss.png'))
-    trainer.extend(extensions.PlotReport(['main/acc', 'validation/main/acc'],
-                                         'epoch', file_name='acc.png'))
-    trainer.extend(extensions.PlotReport(['main/ppl', 'validation/main/ppl'],
-                                         'epoch', file_name='ppl.png'))
+    #trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
+    #                                      'main/loss_att', 'validation/main/loss_att'],
+    #                                     'epoch', file_name='loss.png'))
+    #trainer.extend(extensions.PlotReport(['main/acc', 'validation/main/acc'],
+    #                                     'epoch', file_name='acc.png'))
+    #trainer.extend(extensions.PlotReport(['main/ppl', 'validation/main/ppl'],
+    #                                     'epoch', file_name='ppl.png'))
 
     # Save best models
-    trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/loss'))
-    trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
+    #trainer.extend(snapshot_object(model, 'model.loss.best'),
+    #               trigger=training.triggers.MinValueTrigger('validation/main/loss'))
+    #trainer.extend(snapshot_object(model, 'model.acc.best'),
+    #               trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
     # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(10000, 'iteration'))
+    trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
     
     # epsilon decay in the optimizer
+    """
     if args.opt == 'adadelta':
         if args.criterion == 'acc':
             trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
@@ -268,12 +273,12 @@ def train(args):
                            trigger=CompareValueTrigger(
                                'validation/main/loss',
                                lambda best_value, current_value: best_value < current_value))
-    
+    """
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'main/loss', 'validation/main/loss',
-                   'main/acc', 'validation/main/acc',
-                   'main/ppl', 'validation/main/ppl',
+    report_keys = ['epoch', 'iteration', 'main/loss', 
+                   'main/acc',
+                   'main/ppl',
                    'elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
@@ -305,6 +310,9 @@ def trans(args):
     model, train_args = load_trained_model(args.model)
     assert isinstance(model, MTInterface)
     model.recog_args = args
+    train_args.char_list.insert(0, '<s>')
+    train_args.char_list.append('<blank>')
+
 
     # gpu
     if args.ngpu == 1:
@@ -322,16 +330,18 @@ def trans(args):
             sentences.append(sent)
     # read json data
     one_best = []
+    repeat = []
     if args.batchsize == 0:
         with torch.no_grad():
             for idx, sent in enumerate(sentences):
                 nbest_hyps = model.translate([sent], args, train_args.char_list)
                 best = nbest_hyps[0]['yseq']
-                if best[0] == 1:
+                if best[0] == 0:
                     best = best[1:]
-                if best[-1] == 2:
+                if best[-1] == 0:
                     best = best[:-1]
                 one_best.append(best)
+                repeat.append(np.asarray(nbest_hyps[0]['lens'][:-1]))
                 #one_best.append(id_to_sentence(train_args.char_list, best))
     else:
         def grouper(n, iterable, fillvalue=None):
@@ -346,7 +356,6 @@ def trans(args):
         with torch.no_grad():
             while True:
                 end = min(len(sentences), start + args.batchsize)
-                pdb.set_trace()
                 y = model.translate_batch(sorted_sents[start:end], args, train_args.char_list)
                 for ret in y:
                     best = ret[0]['yseq']
@@ -363,3 +372,7 @@ def trans(args):
     with open(args.result_label, 'w', encoding="utf-8") as f:
         for r in one_best:
             f.write(' '.join(list(map(str, r)))+"\n")
+
+    with open(args.result_label + "_repeat", "w", encoding='utf-8') as f:
+        for r in repeat:
+            f.write(' '.join(list(map(str, r))) + "\n")

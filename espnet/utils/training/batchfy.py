@@ -400,7 +400,7 @@ def sequence_to_id(word_dict, sequence):
     return ids
 
 
-def make_mtbatchset(src_data_path, trg_data_path, batch_size):
+def make_mtbatchset(src_data_path, trg_data_path, repeat_path, batch_size):
     """Make batch set from json dictionary
 
     :param bool mt: if True, use 0-axis of "output" as output and 1-axis of "output" as input in `data` dict
@@ -410,16 +410,20 @@ def make_mtbatchset(src_data_path, trg_data_path, batch_size):
     examples = []
     with open(src_data_path, "r", encoding='utf-8') as sf:
         with open(trg_data_path, "r", encoding='utf-8') as tf:
-            while True:
-                src_line = sf.readline()
-                trg_line = tf.readline()
-                if not src_line or not trg_line:
-                    break
-                src_line = src_line.strip().split()
-                trg_line = trg_line.strip().split()
-                example = (np.asarray(list(map(int, src_line)), dtype=np.int32),
-                         np.asarray(list(map(int, trg_line)), dtype=np.int32))
-                examples.append(example)
+            with open(repeat_path, 'r', encoding='utf-8') as rf:
+                while True:
+                        src_line = sf.readline()
+                        trg_line = tf.readline()
+                        repeat_line = rf.readline()
+                        if not src_line or not trg_line:
+                            break
+                        src_line = src_line.strip().split()
+                        trg_line = trg_line.strip().split()
+                        repeat_line = repeat_line.strip().split()
+                        example = (np.asarray(list(map(int, src_line)), dtype=np.int32),
+                        	 np.asarray(list(map(int, trg_line)), dtype=np.int32),
+				np.asarray(list(map(int, repeat_line)), dtype=np.int32))
+                        examples.append(example)
     examples.sort(key=lambda x: -len(x[0]))
     batch_per_group = 8
     n = batch_per_group * batch_size

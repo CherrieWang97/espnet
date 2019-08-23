@@ -124,7 +124,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --backend ${backend} \
             --batchsize 0 \
             --recog-json ${feat_recog_dir}/split${nj}utt/data_uniq.JOB.json \
-            --result-label ${expdir}/${decode_dir}/data_uniq.JOB.json \
+            --result-label ${expdir}/${decode_dir}/data_uniq.JOB \
             --model ${expdir}/results/${recog_model} \
             --char-list /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/dict_char.txt
 

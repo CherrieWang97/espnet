@@ -140,7 +140,6 @@ class CustomUpdater(training.StandardUpdater):
 
         # Get the next batch ( a list of json files)
         batch = train_iter.next()
-        self.iteration += 1
         x = self.converter(batch, self.device)
 
         # Compute the loss at this time step and accumulate it
