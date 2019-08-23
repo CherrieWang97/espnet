@@ -84,7 +84,7 @@ class CustomConverter(object):
 
         return xs, ilens, ys
 
-    def transform(self, batch, add_noise=False):
+    def transform(self, batch, add_noise=True):
         src = []
         tgt = []
         lens = []
@@ -95,10 +95,25 @@ class CustomConverter(object):
                 ilen = len(xs)
                 xs_n = []
                 i = 0
+                repeat = False
+                word_len = 0
                 while i < ilen:
                     xs_n.append(xs[i])
+                    word_len += 1
+                    if xs[i] == 30 and repeat == False:
+                        blank_len = random.randint(0, 4 * word_len)
+                        xs_n.extend([114] * blank_len)
+                        word_len = 0
                     if random.random() > 0.55:
                         i += 1
+                        repeat = False
+                    else:
+                        if repeat == True:
+                            if random.random() < 0.85:
+                                i += 1
+                                repeat = False
+                        else:
+                            repeat = True
                 xs = np.asarray(xs_n)
                 new_batch.append((xs, ys))
             new_batch.sort(key=lambda x: -len(x[0]))
