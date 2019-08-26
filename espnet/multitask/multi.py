@@ -125,7 +125,7 @@ class CustomUpdater(training.StandardUpdater):
     """
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, converter, device, ngpu):
+                 optimizer, converter, device, ngpu, mt_converter):
         super(CustomUpdater, self).__init__(train_iter, optimizer)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
@@ -134,29 +134,31 @@ class CustomUpdater(training.StandardUpdater):
         self.ngpu = ngpu
         self.forward_count = 0
         self.iteration = 0
+        self.mt_converter = mt_converter
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
         # When we pass one iterator and optimizer to StandardUpdater.__init__,
         # they are automatically named 'main'.
-        st_iter = self.get_iterator('main')
+        st_iter = self.get_iterator('st')
         asr_iter = self.get_iterator('asr')
-        mt_iter = self.get_iterator('mt')
+        mt_iter = self.get_iterator('main')
         optimizer = self.get_optimizer('main')
 
         alpha = random.random()
         # Get the next batch ( a list of json files)
-        if alpha < 0.6: 
+        if alpha > 1.6: 
             batch = st_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x).mean()
-        elif alpha > 0.8:
+        elif alpha > 1.8:
             batch = asr_iter.next()
             x = self.converter(batch, self.device)
             loss = self.model(*x, task="asr").mean()
         else:
             batch = mt_iter.next()
-            xs, ilens, ys = batch[0]
+            batch = self.mt_converter.transform(batch[0], True)
+            xs, ilens, ys = batch
             xs = xs.to(self.device)
             ilens = ilens.to(self.device)
             ys = ys.to(self.device)
@@ -203,8 +205,7 @@ def train(args):
 
     # Initialize decoder with pre-trained MT decoder
     if args.mt_model:
-        mt_model = E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
-        torch_load(args.mt_model, mt_model)
+        mt_model, _ = load_trained_model(args.mt_model) #E2E(idim, args.src_vocab, args.trg_vocab, args, bias=False)
 
     # specify model architecture
     model = E2E(idim, args.src_vocab, args.trg_vocab, args, asr_model=asr_model, mt_model=mt_model, bias=False)
@@ -324,14 +325,14 @@ def train(args):
         TransformDataset(asr_train, load_tr),
         batch_size=1, shuffle=not use_sortagrad)
     mt_iter = ToggleableShufflingSerialIterator(
-            TransformDataset(mt_train, mt_converter.transform),
+            mt_train,
             batch_size=1, shuffle=not use_sortagrad)
-    iters = {"main": train_iter,
+    iters = {"st": train_iter,
              "asr": asr_iter,
-             "mt": mt_iter}
+             "main": mt_iter}
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, iters, optimizer, converter, device, args.ngpu)
+        model, args.grad_clip, iters, optimizer, converter, device, args.ngpu, mt_converter)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -362,7 +363,7 @@ def train(args):
                    trigger=training.triggers.MaxValueTrigger('validation/main/stacc', trigger=(5000, 'iteration')))
 
     # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
+    trainer.extend(torch_snapshot(), trigger=(1000, 'iteration'))
 
     # epsilon decay in the optimizer
     """
@@ -390,7 +391,7 @@ def train(args):
     trainer.extend(extensions.LogReport(trigger=(REPORT_INTERVAL, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/stloss', 'main/stacc','validation/main/stloss', 
                      'validation/main/stacc', 'main/asrloss', 'main/asracc', 
-                      'main/mtloss',
+                      'main/ppl',
                    'elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
