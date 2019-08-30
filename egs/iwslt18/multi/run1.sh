@@ -69,7 +69,7 @@ dict=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_char.t
 
 # NOTE: skip stage 3: LM Preparation
 
-expname=asr_ctc_char
+expname=asr_ctc2
 
 expdir=/teamscratch/tts_intern_experiment/v-chengw/iwslt18/exp4st/${expname}
 mkdir -p ${expdir}
@@ -117,7 +117,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         mkdir -p exp/${decode_dir}
         mkdir -p ${expdir}/${decode_dir}
 
-        ${decode_cmd} JOB=12 exp/${decode_dir}/log/decode.JOB.log \
+        ${decode_cmd} JOB=5:8 exp/${decode_dir}/log/decode.JOB.log \
             CUDA_VISIBLE_DEVICES=1 multi_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
@@ -126,7 +126,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --recog-json ${feat_recog_dir}/split${nj}utt/data_uniq.JOB.json \
             --result-label ${expdir}/${decode_dir}/data_uniq.JOB \
             --model ${expdir}/results/${recog_model} \
-            --char-list /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/dict_char.txt
+            --char-list /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/dict/ted_en.txt
 
         if [ ${rtask} = "dev.de" ] || [ ${rtask} = "test.de" ]; then
             score_bleu.sh --case ${case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} de ${dict}

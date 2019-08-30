@@ -421,7 +421,7 @@ def recog(args):
     else:
         st_model = None
   
-    model = E2E(idim, src_vocab, trg_vocab, train_args, st_model=st_model,bias=False)
+    model = E2E(idim, src_vocab+1, trg_vocab, train_args, st_model=st_model,bias=True)
     torch_load(args.model, model)
     if args.st_model:
         del st_model
@@ -438,7 +438,6 @@ def recog(args):
             char_list.append(word)
     else:
         char_list = train_args.char_list
-    char_list.insert(0, "<eos>")
     char_list.append("<blank>")
 
     # read rnnlm

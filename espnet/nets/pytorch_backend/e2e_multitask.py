@@ -71,8 +71,8 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # below means the last number becomes eos/sos ID
         # note that sos/eos IDs are identical
-        self.sos = 0
-        self.eos = 0
+        self.sos = 1
+        self.eos = 2
 
         # subsample info
         # +1 means input (+1) and layers outputs (args.elayer)
