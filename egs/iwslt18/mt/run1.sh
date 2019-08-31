@@ -115,14 +115,14 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         #### use CPU for decoding
         ngpu=1
 
-        ${decode_cmd} exp/${decode_dir}/decode0.log \
-            mt_recog.py \
+        ${decode_cmd} exp/${decode_dir}/decode1.log \
+            CUDA_VISIBLE_DEVICES=1 mt_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
             --batchsize 0 \
-            --recog-path /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/split_train00 \
-            --result-label ${expdir}/${decode_dir}/result00 \
+            --recog-path /teamscratch/tts_intern_experiment/v-chengw/iwslt18/data4mt/allTed/train/split_train01 \
+            --result-label ${expdir}/${decode_dir}/result01 \
             --model ${expdir}/results/snapshot.ep.15000
 
         #score_bleu.sh --case ${tgt_case} --nlsyms ${nlsyms} ${expdir}/${decode_dir} fr ${dict_tgt} ${dict_src}

@@ -310,7 +310,6 @@ def trans(args):
     model, train_args = load_trained_model(args.model)
     assert isinstance(model, MTInterface)
     model.recog_args = args
-    train_args.char_list.insert(0, '<s>')
     train_args.char_list.append('<blank>')
 
 
@@ -369,10 +368,10 @@ def trans(args):
                     break
         one_best = [sort_one_best[sorted_index.index(i)] for i in range(len(sentences))]
 
-    with open(args.result_label, 'w', encoding="utf-8") as f:
+    with open(args.result_label+'.txt', 'w', encoding="utf-8") as f:
         for r in one_best:
             f.write(' '.join(list(map(str, r)))+"\n")
 
-    with open(args.result_label + "_repeat", "w", encoding='utf-8') as f:
+    with open(args.result_label + "_repeat.txt", "w", encoding='utf-8') as f:
         for r in repeat:
             f.write(' '.join(list(map(str, r))) + "\n")

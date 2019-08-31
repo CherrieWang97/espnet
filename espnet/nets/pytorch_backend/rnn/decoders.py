@@ -80,7 +80,7 @@ class Decoder(torch.nn.Module):
             self.output = torch.nn.Linear(dunits + eprojs, odim)
         else:
             self.output = torch.nn.Linear(dunits, odim)
-        #self.len_predict = torch.nn.Linear(dunits + eprojs, 750)
+        self.len_predict = torch.nn.Linear(dunits + eprojs, 750)
 
         self.loss = None
         self.att = att
