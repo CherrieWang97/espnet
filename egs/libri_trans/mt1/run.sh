@@ -109,9 +109,9 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
 fi
 
-dict_src=data/lang_1char/${train_set}_units_${src_case}.txt
-dict_tgt=data/lang_1char/${train_set}_units_${tgt_case}.txt
-nlsyms=data/lang_1char/non_lang_syms_${tgt_case}.txt
+dict_src=data/lang_1char/src.txt
+dict_tgt=data/lang_1char/trg.txt
+nlsyms=data/lang_1char/non_lang.txt
 echo "dictionary (src): ${dict_src}"
 echo "dictionary (tgt): ${dict_tgt}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
