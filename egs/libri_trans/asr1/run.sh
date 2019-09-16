@@ -39,7 +39,7 @@ case=lc.rm
 
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.
-datadir=/n/rd11/corpora_8/libri_trans/
+datadir=/teamscratch/tts_intern_experiment/v-chengw/data/libri_trans/
 # libri_trans
 #  |_ train/
 #  |_ other/
@@ -81,67 +81,67 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     echo "stage 1: Feature Generation"
     fbankdir=fbank
     # Generate the fbank features; by default 80-dimensional fbanks with pitch on each frame
-    for x in dev test; do
-        steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 32 --write_utt2num_frames true \
-            data/${x} exp/make_fbank/${x} ${fbankdir}
-    done
+    #for x in dev test; do
+    #    steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 32 --write_utt2num_frames true \
+    #        data/${x} exp/make_fbank/${x} ${fbankdir}
+    #done
 
     # speed-perturbed
-    utils/perturb_data_dir_speed.sh 0.9 data/train data/temp1
-    utils/perturb_data_dir_speed.sh 1.0 data/train data/temp2
-    utils/perturb_data_dir_speed.sh 1.1 data/train data/temp3
-    utils/combine_data.sh --extra-files utt2uniq data/train_sp data/temp1 data/temp2 data/temp3
-    rm -r data/temp1 data/temp2 data/temp3
-    steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 32 --write_utt2num_frames true \
-        data/train_sp exp/make_fbank/train_sp ${fbankdir}
-    for lang in en fr fr.gtranslate; do
-        awk -v p="sp0.9-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >data/train_sp/text.tc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >data/train_sp/text.lc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >data/train_sp/text.lc.rm.${lang}
-        awk -v p="sp1.0-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >>data/train_sp/text.tc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >>data/train_sp/text.lc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >>data/train_sp/text.lc.rm.${lang}
-        awk -v p="sp1.1-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >>data/train_sp/text.tc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >>data/train_sp/text.lc.${lang}
-        utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >>data/train_sp/text.lc.rm.${lang}
-    done
+    #utils/perturb_data_dir_speed.sh 0.9 data/train data/temp1
+    #utils/perturb_data_dir_speed.sh 1.0 data/train data/temp2
+    #utils/perturb_data_dir_speed.sh 1.1 data/train data/temp3
+    #utils/combine_data.sh --extra-files utt2uniq data/train_sp data/temp1 data/temp2 data/temp3
+    #rm -r data/temp1 data/temp2 data/temp3
+    #steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 32 --write_utt2num_frames true \
+    #    data/train_sp exp/make_fbank/train_sp ${fbankdir}
+    #for lang in en fr fr.gtranslate; do
+    #    awk -v p="sp0.9-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >data/train_sp/text.tc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >data/train_sp/text.lc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >data/train_sp/text.lc.rm.${lang}
+    #    awk -v p="sp1.0-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >>data/train_sp/text.tc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >>data/train_sp/text.lc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >>data/train_sp/text.lc.rm.${lang}
+    #    awk -v p="sp1.1-" '{printf("%s %s%s\n", $1, p, $1);}' data/train/utt2spk > data/train_sp/utt_map
+    #   utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.tc.${lang} >>data/train_sp/text.tc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.${lang} >>data/train_sp/text.lc.${lang}
+    #    utils/apply_map.pl -f 1 data/train_sp/utt_map <data/train/text.lc.rm.${lang} >>data/train_sp/text.lc.rm.${lang}
+    #done
 
     # Divide into En Fr, Fr (google trans)
-    for x in ${train_set_prefix} dev test; do
-        local/divide_lang.sh ${x}
-    done
+    #for x in ${train_set_prefix} dev test; do
+    #    local/divide_lang.sh ${x}
+    #done
 
-    for lang in en fr fr.gtranslate; do
-        if [ -d data/train_dev.${lang} ];then
-            rm -rf data/train_dev.${lang}
-        fi
-        cp -rf data/dev.${lang} data/train_dev.${lang}
-    done
+    #for lang in en fr fr.gtranslate; do
+    #    if [ -d data/train_dev.${lang} ];then
+    #        rm -rf data/train_dev.${lang}
+    #    fi
+    #    cp -rf data/dev.${lang} data/train_dev.${lang}
+    #done
 
-    for x in ${train_set_prefix} train_dev; do
+    #for x in ${train_set_prefix} train_dev; do
         # remove utt having more than 3000 frames
         # remove utt having more than 400 characters
-        for lang in en fr fr.gtranslate; do
-            remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${x}.${lang} data/${x}.${lang}.tmp
-        done
+    #    for lang in en fr fr.gtranslate; do
+    #        remove_longshortdata.sh --maxframes 3000 --maxchars 400 data/${x}.${lang} data/${x}.${lang}.tmp
+    #    done
 
         # Match the number of utterances between source and target languages
         # extract commocn lines
-        cut -f -1 -d " " data/${x}.en.tmp/text > data/${x}.fr.tmp/reclist1
-        cut -f -1 -d " " data/${x}.fr.tmp/text > data/${x}.fr.tmp/reclist2
-        cut -f -1 -d " " data/${x}.fr.gtranslate.tmp/text > data/${x}.fr.tmp/reclist3
-        comm -12 data/${x}.fr.tmp/reclist1 data/${x}.fr.tmp/reclist2 > data/${x}.fr.tmp/reclist4
-        comm -12 data/${x}.fr.tmp/reclist3 data/${x}.fr.tmp/reclist4 > data/${x}.fr.tmp/reclist
+    #    cut -f -1 -d " " data/${x}.en.tmp/text > data/${x}.fr.tmp/reclist1
+    #    cut -f -1 -d " " data/${x}.fr.tmp/text > data/${x}.fr.tmp/reclist2
+    #    cut -f -1 -d " " data/${x}.fr.gtranslate.tmp/text > data/${x}.fr.tmp/reclist3
+    #    comm -12 data/${x}.fr.tmp/reclist1 data/${x}.fr.tmp/reclist2 > data/${x}.fr.tmp/reclist4
+    #    comm -12 data/${x}.fr.tmp/reclist3 data/${x}.fr.tmp/reclist4 > data/${x}.fr.tmp/reclist
 
-        for lang in en fr fr.gtranslate; do
-            reduce_data_dir.sh data/${x}.${lang}.tmp data/${x}.fr.tmp/reclist data/${x}.${lang}
-            utils/fix_data_dir.sh --utt_extra_files "text.tc text.lc text.lc.rm" data/${x}.${lang}
-        done
-        rm -rf data/${x}.*.tmp
-    done
+    #    for lang in en fr fr.gtranslate; do
+    #        reduce_data_dir.sh data/${x}.${lang}.tmp data/${x}.fr.tmp/reclist data/${x}.${lang}
+    #        utils/fix_data_dir.sh --utt_extra_files "text.tc text.lc text.lc.rm" data/${x}.${lang}
+    #    done
+    #    rm -rf data/${x}.*.tmp
+    #done
 
     # compute global CMVN
     compute-cmvn-stats scp:data/${train_set}/feats.scp data/${train_set}/cmvn.ark
@@ -175,21 +175,21 @@ echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
     echo "stage 2: Dictionary and Json Data Preparation"
-    mkdir -p data/lang_1char/
+    #mkdir -p data/lang_1char/
 
-    echo "make a non-linguistic symbol list for all languages"
-    grep sp1.0 data/${train_set_prefix}.*/text.${case} | cut -f 2- -d' ' | grep -o -P '&[^;]*;'| sort | uniq > ${nlsyms}
-    cat ${nlsyms}
+    #echo "make a non-linguistic symbol list for all languages"
+    #grep sp1.0 data/${train_set_prefix}.*/text.${case} | cut -f 2- -d' ' | grep -o -P '&[^;]*;'| sort | uniq > ${nlsyms}
+    #cat ${nlsyms}
 
     echo "make a dictionary"
-    echo "<unk> 1" > ${dict} # <unk> must be 1, 0 will be used for "blank" in CTC
-    grep sp1.0 data/${train_set_prefix}.*/text.${case} | text2token.py -s 1 -n 1 -l ${nlsyms} | cut -f 2- -d" " | tr " " "\n" \
-        | sort | uniq | grep -v -e '^\s*$' | awk '{print $0 " " NR+1}' >> ${dict}
-    wc -l ${dict}
+    #echo "<unk> 1" > ${dict} # <unk> must be 1, 0 will be used for "blank" in CTC
+    #grep sp1.0 data/${train_set_prefix}.*/text.${case} | text2token.py -s 1 -n 1 -l ${nlsyms} | cut -f 2- -d" " | tr " " "\n" \
+    #    | sort | uniq | grep -v -e '^\s*$' | awk '{print $0 " " NR+1}' >> ${dict}
+    #wc -l ${dict}
 
     echo "make json files"
-    local/data2json.sh --nj 16 --feat ${feat_tr_dir}/feats.scp --text data/${train_set}/text.${case} --nlsyms ${nlsyms} \
-        data/${train_set} ${dict} > ${feat_tr_dir}/data.${case}.json
+    #local/data2json.sh --nj 16 --feat ${feat_tr_dir}/feats.scp --text data/${train_set}/text.${case} --nlsyms ${nlsyms} \
+    #    data/${train_set} ${dict} > ${feat_tr_dir}/data.${case}.json
     local/data2json.sh --nj 16 --feat ${feat_dt_dir}/feats.scp --text data/${train_dev}/text.${case} --nlsyms ${nlsyms} \
         data/${train_dev} ${dict} > ${feat_dt_dir}/data.${case}.json
     for rtask in ${recog_set}; do
