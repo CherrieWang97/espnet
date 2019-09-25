@@ -153,7 +153,7 @@ class E2E(STInterface, torch.nn.Module):
         self.reporter = Reporter()
 
         self.criterion = LabelSmoothingLoss(self.odim, self.ignore_id, args.lsm_weight,
-                                               args.transformer_length_normalized_loss)
+                                               True)
         self.reset_parameters(args)
         self.adim = args.adim
         self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type=args.ctc_type, reduce=True)
@@ -239,6 +239,29 @@ class E2E(STInterface, torch.nn.Module):
                           ignore_label=self.ignore_id)
         return loss, acc
 
+    def ibm_loss(self, x, target, smoothing=0.1):
+        """Compute the IBM loss"""
+        batch_size = x.size(0)
+        seq_len = target.size(1)
+        size = x.size(-1)
+        with torch.no_grad():
+            true_dist = torch.zeros([batch_size, seq_len, size], dtype=x.dtype, device=x.device)
+            true_dist = true_dist.fill_(smoothing/(size-1))
+            ignore = target == self.ignore_id
+            true_length = torch.sum((1-ignore), dim=1)
+            target = target.masked_fill(ignore, 0)
+            true_dist = true_dist.view(-1, size)
+            target = target.view(-1)
+            true_dist.scatter_(1, target.unsqueeze(1), 1-smoothing)
+            true_dist = true_dist.masked_fill(ignore.view(-1).unsqueeze(1), 0)
+            true_dist = torch.sum(true_dist.view(batch_size, seq_len, size), dim=1)
+            true_mean = true_dist / true_length.to(true_dist.dtype).unsqueeze(1)
+            lfc = torch.nn.KLDivLoss(reduce=False)
+            kl = lfc(torch.log(x), true_mean)
+            loss = kl.sum() / batch_size
+        return loss
+            
+
     def forward(self, xs_pad, ilens, ys_pad, ys_pad_asr=None):
         """E2E forward.
 
@@ -269,10 +292,12 @@ class E2E(STInterface, torch.nn.Module):
         hs_pad = self.t2ddense(enc_outputs[0])
         # decoder forward
         logits = self.pred(hs_pad)
-        soft_logits = torch.softmax(logits)
+        soft_logits = torch.softmax(logits, dim=-1)
         soft_logits = torch.mean(soft_logits, dim=1)
-        
+
         pdb.set_trace()
+        ibm_loss = self.ibm_loss(soft_logits, ys_pad)
+        
         loss_st, acc = self.decoder_forward(ys_pad,  hs_pad, hs_mask)
                 
         if ys_pad_asr is not None:
