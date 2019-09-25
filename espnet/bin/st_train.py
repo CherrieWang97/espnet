@@ -71,6 +71,9 @@ def get_parser(parser=None, required=True):
     parser.add_argument('--model-module', type=str, default=None,
                         help='model defined module (default: espnet.nets.xxx_backend.e2e_st:E2E)')
     # loss related
+    parser.add_argument('--ctc_type', default='warpctc', type=str,
+                        choices=['builtin', 'warpctc'],
+                        help='Type of CTC implementation to calculate loss.')
     parser.add_argument('--mtlalpha', default=0.0, type=float,
                         help='Multitask learning coefficient, alpha: alpha*ctc_loss + (1-alpha)*att_loss ')
     # TODO(hirofumi0810): remove this after adding e2e_st_transformer.py

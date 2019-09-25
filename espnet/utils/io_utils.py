@@ -2,6 +2,7 @@ from collections import OrderedDict
 import io
 import logging
 import os
+import pdb
 
 import h5py
 import kaldiio
@@ -48,7 +49,7 @@ class LoadInputsAndTargets(object):
                  keep_all_data_on_mem=False,
                  ):
         self._loaders = {}
-        if mode not in ['asr', 'tts', 'mt']:
+        if mode not in ['asr', 'tts', 'mt', 'tp']:
             raise ValueError(
                 'Only asr or tts are allowed: mode={}'.format(mode))
         if preprocess_conf is not None:
@@ -99,6 +100,8 @@ class LoadInputsAndTargets(object):
         x_feats_dict = OrderedDict()  # OrderedDict[str, List[np.ndarray]]
         y_feats_dict = OrderedDict()  # OrderedDict[str, List[np.ndarray]]
         uttid_list = []  # List[str]
+        if self.mode == "tp":
+            tp_list = []
 
         for uttid, info in batch:
             uttid_list.append(uttid)
@@ -146,8 +149,12 @@ class LoadInputsAndTargets(object):
                         x = self._get_from_loader(
                             filepath=inp['feat'],
                             filetype=inp.get('filetype', 'mat'))
-
+                    if 'transcript' in inp and self.mode == "tp":
+                        tp = inp['transcript']
+                        tp_list.append(tp)
+                        x = np.concatenate((np.asarray([102]), x, np.asarray([102])))
                     y_feats_dict.setdefault(inp['name'], []).append(x)
+                   
 
         if self.mode == 'asr':
             return_batch, uttid_list = self._create_batch_asr(
@@ -160,6 +167,9 @@ class LoadInputsAndTargets(object):
         elif self.mode == 'mt':
             return_batch, uttid_list = self._create_batch_mt(
                 x_feats_dict, y_feats_dict, uttid_list)
+        elif self.mode == "tp":
+            return_batch, uttid_list, tp_list = self._create_batch_tp(
+                x_feats_dict, y_feats_dict, uttid_list, tp_list)
         else:
             raise NotImplementedError
 
@@ -169,9 +179,71 @@ class LoadInputsAndTargets(object):
                 return_batch['input1'] = \
                     self.preprocessing(return_batch['input1'], uttid_list,
                                        **self.preprocess_args)
-
         # Doesn't return the names now.
+        if self.mode == "tp":
+            return tuple(return_batch.values()), tp_list
         return tuple(return_batch.values())
+
+    def _create_batch_tp(self, x_feats_dict, y_feats_dict, uttid_list, tp_list):
+        """Create a OrderedDict for the mini-batch
+
+        :param OrderedDict x_feats_dict:
+            e.g. {"input1": [ndarray, ndarray, ...],
+                  "input2": [ndarray, ndarray, ...]}
+        :param OrderedDict y_feats_dict:
+            e.g. {"target1": [ndarray, ndarray, ...],
+                  "target2": [ndarray, ndarray, ...]}
+        :param: List[str] uttid_list:
+            Give uttid_list to sort in the same order as the mini-batch
+        :return: batch, uttid_list
+        :rtype: Tuple[OrderedDict, List[str]]
+        """
+        # Create a list from the first item
+        xs = list(x_feats_dict.values())[0]
+
+        if self.load_output:
+            if len(y_feats_dict) == 1:
+                ys = list(y_feats_dict.values())[0]
+                assert len(xs) == len(ys), (len(xs), len(ys))
+
+                # get index of non-zero length samples
+                nonzero_idx = list(filter(lambda i: len(ys[i]) > 0, range(len(ys))))
+                for n in range(1, len(y_feats_dict)):
+                    nonzero_idx = filter(lambda i: len(ys[n][i]) > 0, nonzero_idx)
+        else:
+            # Note(kamo): Be careful not to make nonzero_idx to a generator
+            nonzero_idx = list(range(len(xs)))
+
+        if self.sort_in_input_length:
+            # sort in input lengths
+            nonzero_sorted_idx = sorted(nonzero_idx, key=lambda i: -len(xs[i]))
+        else:
+            nonzero_sorted_idx = nonzero_idx
+
+        if len(nonzero_sorted_idx) != len(xs):
+            logging.warning(
+                'Target sequences include empty tokenid (batch {} -> {}).'
+                .format(len(xs), len(nonzero_sorted_idx)))
+
+        # remove zero-length samples
+        xs = [xs[i] for i in nonzero_sorted_idx]
+        uttid_list = [uttid_list[i] for i in nonzero_sorted_idx]
+        tp_list = [tp_list[i] for i in nonzero_sorted_idx]
+
+        x_name = list(x_feats_dict.keys())[0]
+        if self.load_output:
+            if len(y_feats_dict) == 1:
+                ys = [ys[i] for i in nonzero_sorted_idx]
+            elif len(y_feats_dict) > 1:  # multi-speaker asr mode
+                ys = zip(*[[y[i] for i in nonzero_sorted_idx] for y in ys])
+
+            y_name = list(y_feats_dict.keys())[0]
+
+            # Keepng x_name and y_name, e.g. input1, for future extension
+            return_batch = OrderedDict([(x_name, xs), (y_name, ys)])
+        else:
+            return_batch = OrderedDict([(x_name, xs)])
+        return return_batch, uttid_list, tp_list
 
     def _create_batch_asr(self, x_feats_dict, y_feats_dict, uttid_list):
         """Create a OrderedDict for the mini-batch

@@ -67,7 +67,7 @@ set -o pipefail
 
 train_set=train_960
 train_dev=dev
-recog_set="test_clean test_other dev_clean dev_other"
+recog_set="test_clean"
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
     echo "stage -1: Data Download"
@@ -134,8 +134,8 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
 fi
 
-dict=data/lang_char/${train_set}_${bpemode}${nbpe}_units.txt
-bpemodel=data/lang_char/${train_set}_${bpemode}${nbpe}
+dict=data/dict/${train_set}_${bpemode}${nbpe}_units.txt
+bpemodel=data/dict/${train_set}_${bpemode}${nbpe}
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
@@ -154,7 +154,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         data/${train_dev} ${dict} > ${feat_dt_dir}/data_${bpemode}${nbpe}.json
 
     for rtask in ${recog_set}; do
-        feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
+        feat_recog_dir=${dumpdir}/${rtask}
         data2json.sh --feat ${feat_recog_dir}/feats.scp --bpecode ${bpemodel}.model \
             data/${rtask} ${dict} > ${feat_recog_dir}/data_${bpemode}${nbpe}.json
     done
@@ -226,8 +226,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --minibatches ${N} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --train-json ${feat_tr_dir}/data_${bpemode}${nbpe}.json \
-        --valid-json ${feat_dt_dir}/data_${bpemode}${nbpe}.json
+        --train-json dump/train_960/data_${bpemode}${nbpe}.json \
+        --valid-json dump/dev_clean/data_${bpemode}${nbpe}.json
 fi
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
@@ -241,12 +241,12 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             recog_model=model.last${n_average}.avg.best
             opt="--log"
         fi
-        average_checkpoints.py \
-            ${opt} \
-            --backend ${backend} \
-            --snapshots ${expdir}/results/snapshot.ep.* \
-            --out ${expdir}/results/${recog_model} \
-            --num ${n_average}
+        #average_checkpoints.py \
+        #    ${opt} \
+        #    --backend ${backend} \
+        #    --snapshots ${expdir}/results/snapshot.ep.* \
+        #    --out ${expdir}/results/${recog_model} \
+        #    --num ${n_average}
 
         # Average LM models
         if ${use_lm_valbest_average}; then
@@ -256,12 +256,12 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             lang_model=rnnlm.last${lm_n_average}.avg.best
             opt="--log"
         fi
-        average_checkpoints.py \
-            ${opt} \
-            --backend ${backend} \
-            --snapshots ${lmexpdir}/snapshot.ep.* \
-            --out ${lmexpdir}/${lang_model} \
-            --num ${lm_n_average}
+        #average_checkpoints.py \
+        #    ${opt} \
+        #    --backend ${backend} \
+        #    --snapshots ${lmexpdir}/snapshot.ep.* \
+        #    --out ${lmexpdir}/${lang_model} \
+        #    --num ${lm_n_average}
     fi
     nj=32
 
@@ -272,7 +272,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
         # split data
-        splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.json
+        splitjson.py --parts ${nj} dump/test_clean/data_${bpemode}${nbpe}.json
 
         #### use CPU for decoding
         ngpu=0
@@ -286,8 +286,8 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --batchsize 0 \
             --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
-            --model ${expdir}/results/${recog_model}  \
-            --rnnlm ${lmexpdir}/${lang_model}
+            --model exp/train_960_pytorch_train_pytorch_transformer.v1_aheads8_batch-bins15000000_specaug/results/model.val5.avg.best  \
+            --rnnlm exp/irielm.ep11.last5.avg/rnnlm.model.best
 
         score_sclite.sh --bpe ${nbpe} --bpemodel ${bpemodel}.model --wer true ${expdir}/${decode_dir} ${dict}
 

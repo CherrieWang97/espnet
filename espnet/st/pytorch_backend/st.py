@@ -69,7 +69,7 @@ class CustomConverter(ASRCustomConverter):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, asr_task=False):
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, asr_task=True):
         """Construct a CustomConverter object."""
         super().__init__(subsampling_factor=subsampling_factor, dtype=dtype)
         self.asr_task = asr_task
@@ -85,13 +85,8 @@ class CustomConverter(ASRCustomConverter):
             tuple(torch.Tensor, torch.Tensor, torch.Tensor)
 
         """
-        _, ys = batch[0]
         xs_pad, ilens, ys_pad = super().__call__(batch, device)
-        if self.asr_task:
-            ys_pad_asr = pad_list([torch.from_numpy(np.array(y[1])).long()
-                                   for y in ys], self.ignore_id).to(device)
-        else:
-            ys_pad_asr = None
+        ys_pad, ys_pad_asr = ys_pad
 
         return xs_pad, ilens, ys_pad, ys_pad_asr
 
@@ -206,7 +201,7 @@ def train(args):
 
     # Setup a converter
     converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype,
-                                asr_task=args.asr_weight > 0)
+                                asr_task=True)
 
     # read json data
     with open(args.train_json, 'rb') as f:

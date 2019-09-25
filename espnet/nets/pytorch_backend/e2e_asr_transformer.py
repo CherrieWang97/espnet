@@ -229,7 +229,7 @@ class E2E(ASRInterface, torch.nn.Module):
     def encode(self, feat):
         """Encode acoustic features."""
         self.eval()
-        feat = torch.as_tensor(feat).unsqueeze(0)
+        feat = torch.as_tensor(feat).cuda().unsqueeze(0)
         enc_output, _ = self.encoder(feat, None)
         return enc_output.squeeze(0)
 
@@ -283,7 +283,7 @@ class E2E(ASRInterface, torch.nn.Module):
 
             from espnet.nets.ctc_prefix_score import CTCPrefixScore
 
-            ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), 0, self.eos, numpy)
+            ctc_prefix_score = CTCPrefixScore(lpz.cpu().detach().numpy(), 0, self.eos, numpy)
             hyp['ctc_state_prev'] = ctc_prefix_score.initial_state()
             hyp['ctc_score_prev'] = 0.0
             if ctc_weight != 1.0:
@@ -306,8 +306,8 @@ class E2E(ASRInterface, torch.nn.Module):
                 vy[0] = hyp['yseq'][i]
 
                 # get nbest local scores and their ids
-                ys_mask = subsequent_mask(i + 1).unsqueeze(0)
-                ys = torch.tensor(hyp['yseq']).unsqueeze(0)
+                ys_mask = subsequent_mask(i + 1).cuda().unsqueeze(0)
+                ys = torch.tensor(hyp['yseq']).cuda().unsqueeze(0)
                 # FIXME: jit does not match non-jit result
                 if use_jit:
                     if traced_decoder is None:
@@ -326,12 +326,12 @@ class E2E(ASRInterface, torch.nn.Module):
                     local_best_scores, local_best_ids = torch.topk(
                         local_att_scores, ctc_beam, dim=1)
                     ctc_scores, ctc_states = ctc_prefix_score(
-                        hyp['yseq'], local_best_ids[0], hyp['ctc_state_prev'])
+                        hyp['yseq'], local_best_ids[0].cpu(), hyp['ctc_state_prev'])
                     local_scores = \
-                        (1.0 - ctc_weight) * local_att_scores[:, local_best_ids[0]] \
+                        (1.0 - ctc_weight) * local_att_scores[:, local_best_ids[0]].cpu() \
                         + ctc_weight * torch.from_numpy(ctc_scores - hyp['ctc_score_prev'])
                     if rnnlm:
-                        local_scores += recog_args.lm_weight * local_lm_scores[:, local_best_ids[0]]
+                        local_scores += recog_args.lm_weight * local_lm_scores[:, local_best_ids[0]].cpu()
                     local_best_scores, joint_best_ids = torch.topk(local_scores, beam, dim=1)
                     local_best_ids = local_best_ids[:, joint_best_ids[0]]
                 else:
