@@ -108,10 +108,9 @@ class CustomEvaluator(BaseEvaluator):
         summary = reporter_module.DictSummary()
 
         self.model.eval()
-        self.model.bert.eval()
         with torch.no_grad():
             for batch in it:
-                x = tuple(arr for arr in batch)
+                x = tuple(arr.to(self.device) for arr in batch)
                 observation = {}
                 with reporter_module.report_scope(observation):
                     # read scp files
@@ -121,7 +120,6 @@ class CustomEvaluator(BaseEvaluator):
 
                 summary.add(observation)
         self.model.train()
-        self.model.bert.train()
 
         return summary.compute_mean()
 
@@ -166,7 +164,8 @@ class CustomUpdater(StandardUpdater):
         batch = train_iter.next()
         self.iteration += 1
 
-        x = tuple(arr for arr in batch)
+        x = tuple(arr.to(self.device) for arr in batch)
+        #pdb.set_trace()
 
         # Compute the loss at this time step and accumulate it
         loss = self.model(*x).mean() / self.accum_grad
@@ -219,7 +218,7 @@ class CustomConverter(object):
     def __init__(self, subsampling_factor=1, dtype=torch.float32):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
-        self.ignore_id = -1
+        self.pad_id = -1
         self.dtype = dtype
 
     def __call__(self, batch, device=torch.device('cpu')):
@@ -264,15 +263,14 @@ class CustomConverter(object):
         # NOTE: this is for multi-task learning (e.g., speech translation)
         if isinstance(ys[0], tuple):
             ys_pad_0 = pad_list([torch.from_numpy(np.array(y[0])).long() for y in ys],
-                                self.ignore_id).to(device)
+                                self.pad_id).to(device)
             ys_pad_1 = pad_list([torch.from_numpy(np.array(y[1])).long() for y in ys],
                                 0).to(device)
             return xs_pad, ilens, ys_pad_0, ys_pad_1
         else:
-            ys_pad = pad_list([torch.from_numpy(y).long()
-                               for y in ys], self.ignore_id).to(device)
-
-        return xs_pad, ilens, ys_pad
+            ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
+                               for y in ys], self.pad_id).to(device)
+            return xs_pad, ilens, ys_pad #, tp
 
 
 def train(args):
@@ -458,6 +456,7 @@ def train(args):
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
+    """
     if args.num_save_attention > 0 and args.mtlalpha != 1.0:
         data = sorted(list(valid_json.items())[:args.num_save_attention],
                       key=lambda x: int(x[1]['input'][0]['shape'][1]), reverse=True)
@@ -473,16 +472,13 @@ def train(args):
         trainer.extend(att_reporter, trigger=(1, 'epoch'))
     else:
         att_reporter = None
-
+    """
+    att_reporter = None
     # Make a plot for training and validation values
-    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
-                                          'main/loss_ctc', 'validation/main/loss_ctc',
-                                          'main/loss_att', 'validation/main/loss_att'],
+    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss'],
                                          'epoch', file_name='loss.png'))
     trainer.extend(extensions.PlotReport(['main/acc', 'validation/main/acc'],
                                          'epoch', file_name='acc.png'))
-    trainer.extend(extensions.PlotReport(['main/cer_ctc', 'validation/main/cer_ctc'],
-                                         'epoch', file_name='cer.png'))
 
     # Save best models
     trainer.extend(snapshot_object(model, 'model.loss.best'),
@@ -492,7 +488,7 @@ def train(args):
                        trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
     # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
+    trainer.extend(torch_snapshot(), trigger=(5000, 'iteration'))
 
     # epsilon decay in the optimizer
     if args.opt == 'adadelta':
@@ -517,9 +513,8 @@ def train(args):
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'main/loss', 'main/loss_ctc', 'main/loss_att',
-                   'validation/main/loss', 'validation/main/loss_ctc', 'validation/main/loss_att',
-                   'main/acc', 'validation/main/acc', 'main/cer_ctc', 'validation/main/cer_ctc',
+    report_keys = ['epoch', 'iteration', 'main/loss', 'main/acc',
+                   'validation/main/loss','validation/main/acc',
                    'elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(

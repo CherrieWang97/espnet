@@ -22,6 +22,7 @@ import numpy as np
 import six
 import torch
 from torch.nn import CrossEntropyLoss
+from torch.nn import functional as F
 
 from chainer import reporter
 from espnet.nets.e2e_asr_common import label_smoothing_dist
@@ -108,7 +109,7 @@ class E2E(STInterface, torch.nn.Module):
     def attention_plot_class(self):
         return PlotAttentionReport
 
-    def __init__(self, idim, odim, args, ignore_id=0, asr_model=None, mt_model=None):
+    def __init__(self, idim, odim, args, asr_model=None, mt_model=None):
         """Construct an E2E object."""
         super(E2E, self).__init__()
         torch.nn.Module.__init__(self)
@@ -126,9 +127,9 @@ class E2E(STInterface, torch.nn.Module):
             positional_dropout_rate=args.dropout_rate,
             attention_dropout_rate=args.transformer_attn_dropout_rate
         )
-        self.s2tdense = torch.nn.Linear(args.adim, 768)
-        self.t2ddense = torch.nn.Linear(768, args.adim)
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.xlm = XLMModel.from_pretrained('xlm-mlm-ende-1024')
+        self.s2tdense = torch.nn.Linear(args.adim, self.xlm.dim)
+        self.t2ddense = torch.nn.Linear(self.xlm.dim, args.adim)
         self.pred = torch.nn.Linear(args.adim, odim)
         self.decoder = Decoder(
             odim=odim,
@@ -142,18 +143,27 @@ class E2E(STInterface, torch.nn.Module):
             src_attention_dropout_rate=args.transformer_attn_dropout_rate
         )
         self.train()
-        self.bert.train()
+        self.xlm.train()
         # below means the last number becomes eos/os ID
         # note that sos/eos IDs are identical
         self.sos = odim - 1
         self.eos = odim - 1
         self.odim = odim
-        self.ignore_id = -1
+        self.pad_id = -1
+        self.speech_id = 4
+        self.txt_id = 5
+        self.blank_id = 6
         self.subsample = [1]
         self.reporter = Reporter()
-
-        self.criterion = LabelSmoothingLoss(self.odim, self.ignore_id, args.lsm_weight,
-                                               True)
+        """
+        self.st_loss = args.st_loss
+        self.mt_loss = args.mt_loss
+        self.kd_loss = args.kd_loss
+        self.ibm_loss = args.ibm_loss
+        self.ctc_loss = args.ctc_loss
+        """
+        self.criterion = LabelSmoothingLoss(self.odim, self.pad_id, args.lsm_weight,
+                                               False)
         self.reset_parameters(args)
         self.adim = args.adim
         self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type=args.ctc_type, reduce=True)
@@ -218,11 +228,41 @@ class E2E(STInterface, torch.nn.Module):
             xs_pad = torch.cat([tgt_lang_ids, xs_pad], dim=1)
         return xs_pad, ys_pad
  
-    def get_bert_mask(self, mask):
-        bert_mask = mask.unsqueeze(1)
-        bert_mask = bert_mask.to(dtype=next(self.parameters()).dtype)
-        bert_mask = (1.0 - bert_mask) * -10000.0
-        return bert_mask
+    def get_masks(self, slen, lengths):
+        """"
+        Generate hidden states mask, and optionally an attention mask
+        """
+        bs = lengths.size(0)
+        assert lengths.max().item() <= slen
+        alen = torch.arange(slen, dtype=torch.long, device=lengths.device)
+        mask = alen < lengths[:, None]
+        assert mask.size() == (bs, slen)
+        return mask
+
+    def xlm_forward(self, x, xlens):
+        bs = x.size(0)
+        slen = x.size(1)
+        mask = self.get_masks(slen, xlens)
+        langs = torch.ones((bs, slen), dtype=torch.long, device=x.device)
+        x = x + self.xlm.lang_embeddings(langs)
+        token_type_ids = torch.ones((bs, slen), dtype=torch.long, device=x.device).fill_(self.speech_id)
+        x = x + self.xlm.embeddings(token_type_ids)
+        x = self.xlm.layer_norm_emb(x)
+        x = F.dropout(x, p=self.xlm.dropout, training=self.training)
+        x *= mask.unsqueeze(-1).to(x.dtype)
+    
+        for i in range(self.xlm.n_layers):
+            attn_outputs = self.xlm.attentions[i](x, mask, cache=None, head_mask=None)
+            attn = attn_outputs[0]
+            attn = F.dropout(attn, p=self.xlm.dropout, training=self.training)
+            x = x + attn
+            x = self.xlm.layer_norm1[i](x)
+
+            x = x + self.xlm.ffns[i](x)
+            x = self.xlm.layer_norm2[i](x)
+            x *= mask.unsqueeze(-1).to(x.dtype)
+
+        return x
 
     def speech_encoder_forward(self, xs_pad, ilens):
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
@@ -231,12 +271,12 @@ class E2E(STInterface, torch.nn.Module):
         return hs_pad, hs_mask
 
     def decoder_forward(self, ys_pad, hs_pad, hs_mask):
-        ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
-        ys_mask = target_mask(ys_in_pad, self.ignore_id)
+        ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.pad_id)
+        ys_mask = target_mask(ys_in_pad, self.pad_id)
         pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad, hs_mask)
         loss = self.criterion(pred_pad, ys_out_pad)
         acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad,
-                          ignore_label=self.ignore_id)
+                          ignore_label=self.pad_id)
         return loss, acc
 
     def ibm_loss(self, x, target, smoothing=0.1):
@@ -275,31 +315,23 @@ class E2E(STInterface, torch.nn.Module):
         # 1. forward encoder
         hs_pad, hs_mask = self.speech_encoder_forward(xs_pad, ilens)
         hs_len = hs_mask.view(batch_size, -1).sum(1)
-        if ys_pad_asr is not None:
-            loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
+        #if ys_pad_asr is not None:
+        #    loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
 
         # bert encoder forward
-        hs_pad = self.s2tdense(hs_pad)
-        
-        bert_mask = self.get_bert_mask(hs_mask)
-        head_mask = [None] * self.bert.config.num_hidden_layers
-        token_ids = torch.zeros([hs_pad.size(0), hs_pad.size(1)], dtype=torch.long, device=hs_pad.device)
-        token_embeddings = self.bert.embeddings.token_type_embeddings(token_ids)
-        hs_pad = hs_pad + token_embeddings
-
-        # add position embedding
-        enc_outputs = self.bert.encoder(hs_pad, bert_mask, head_mask = head_mask)
-        hs_pad = self.t2ddense(enc_outputs[0])
+        #hs_pad = self.s2tdense(hs_pad)
+        #enc_output = self.xlm_forward(hs_pad, hs_len)
+ 
+        #hs_pad = self.t2ddense(enc_output)
         # decoder forward
-        logits = self.pred(hs_pad)
-        soft_logits = torch.softmax(logits, dim=-1)
-        soft_logits = torch.mean(soft_logits, dim=1)
+        #logits = self.pred(hs_pad)
+        #soft_logits = torch.softmax(logits, dim=-1)
+        #soft_logits = torch.mean(soft_logits, dim=1)
 
-        pdb.set_trace()
-        ibm_loss = self.ibm_loss(soft_logits, ys_pad)
+        #ibm_loss = self.ibm_loss(soft_logits, ys_pad)
         
         loss_st, acc = self.decoder_forward(ys_pad,  hs_pad, hs_mask)
-                
+        """        
         if ys_pad_asr is not None:
             y_lens = [len(y[y!=self.ignore_id]) for y in ys_pad_asr]
             ys_pad_asr = ys_pad_asr[:, :max(y_lens)]    #for data parallel
@@ -310,16 +342,16 @@ class E2E(STInterface, torch.nn.Module):
             loss_mt, _ = self.decoder_forward(ys_pad, txt_hs_pad, txt_mask)
         else:
             loss_mt = None
-            
+        """    
         # copyied from e2e_asr
-        self.loss = loss
+        self.loss = loss_st
         loss_data = float(self.loss)
         self.acc[0] = acc
         self.reporter.report(loss_data, acc)
-        #if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-        #    self.reporter.report(loss_ctc_data, loss_att_data, self.acc, cer_ctc, cer, wer, loss_data)
-        #else:
-        #    logging.warning('loss (=%f) is not correct', loss_data)
+        if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
+            self.reporter.report(loss_data,acc)
+        else:
+            logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss
 
     def scorers(self):

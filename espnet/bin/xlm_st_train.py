@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # encoding: utf-8
 
-# Copyright 2017 Tomoki Hayashi (Nagoya University)
+# Copyright 2019 Kyoto University (Hirofumi Inaguma)
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
-"""End-to-end speech recognition model training script."""
+"""End-to-end speech translation model training script."""
 
 import configargparse
 import logging
@@ -24,7 +24,7 @@ def get_parser(parser=None, required=True):
     """Get default arguments."""
     if parser is None:
         parser = configargparse.ArgumentParser(
-            description="Train an automatic speech recognition (ASR) model on one CPU, one or multiple GPUs",
+            description="Train a speech translation (ST) model on one CPU, one or multiple GPUs",
             config_file_parser_class=configargparse.YAMLConfigFileParser,
             formatter_class=configargparse.ArgumentDefaultsHelpFormatter)
     # general configuration
@@ -67,15 +67,23 @@ def get_parser(parser=None, required=True):
                         help='Filename of train label data (json)')
     parser.add_argument('--valid-json', type=str, default=None,
                         help='Filename of validation label data (json)')
+    parser.add_argument('--st-loss', default=True, action='store_true')
+    parser.add_argument('--ctc-loss', default=False, action='store_true')
+    parser.add_argument('--mt-loss', default=False, action='store_true')
+    parser.add_argument('--kd-loss', default=False, action='store_true')
+    parser.add_argument('--ibm-loss', default=False, action='store_true')
     # network architecture
     parser.add_argument('--model-module', type=str, default=None,
-                        help='model defined module (default: espnet.nets.xxx_backend.e2e_asr:E2E)')
+                        help='model defined module (default: espnet.nets.xxx_backend.e2e_st:E2E)')
     # loss related
     parser.add_argument('--ctc_type', default='warpctc', type=str,
                         choices=['builtin', 'warpctc'],
                         help='Type of CTC implementation to calculate loss.')
-    parser.add_argument('--mtlalpha', default=0.5, type=float,
+    parser.add_argument('--mtlalpha', default=0.0, type=float,
                         help='Multitask learning coefficient, alpha: alpha*ctc_loss + (1-alpha)*att_loss ')
+    # TODO(hirofumi0810): remove this after adding e2e_st_transformer.py
+    parser.add_argument('--asr-weight', default=0.0, type=float,
+                        help='Multitask learning coefficient, weight: weight*asr_loss + (1-weight)*st_loss')
     parser.add_argument('--lsm-type', const='', default='', type=str, nargs='?', choices=['', 'unigram'],
                         help='Apply label smoothing with a specified distribution type')
     parser.add_argument('--lsm-weight', default=0.0, type=float,
@@ -85,6 +93,9 @@ def get_parser(parser=None, required=True):
                         help='Compute CER on development set')
     parser.add_argument('--report-wer', default=False, action='store_true',
                         help='Compute WER on development set')
+    # translations options to compute BLEU
+    parser.add_argument('--report-bleu', default=True, action='store_true',
+                        help='Compute BLEU on development set')
     parser.add_argument('--nbest', type=int, default=1,
                         help='Output N-best hypotheses')
     parser.add_argument('--beam-size', type=int, default=4,
@@ -97,13 +108,11 @@ def get_parser(parser=None, required=True):
                         to automatically find maximum hypothesis lengths""")
     parser.add_argument('--minlenratio', default=0.0, type=float,
                         help='Input length ratio to obtain min output length')
-    parser.add_argument('--ctc-weight', default=0.3, type=float,
-                        help='CTC weight in joint decoding')
     parser.add_argument('--rnnlm', type=str, default=None,
                         help='RNNLM model file to read')
     parser.add_argument('--rnnlm-conf', type=str, default=None,
                         help='RNNLM model config file to read')
-    parser.add_argument('--lm-weight', default=0.1, type=float,
+    parser.add_argument('--lm-weight', default=0.0, type=float,
                         help='RNNLM weight.')
     parser.add_argument('--sym-space', default='<space>', type=str,
                         help='Space symbol')
@@ -142,6 +151,10 @@ def get_parser(parser=None, required=True):
                         help='Epsilon constant for optimizer')
     parser.add_argument('--eps-decay', default=0.01, type=float,
                         help='Decaying ratio of epsilon')
+    parser.add_argument('--lr', default=1e-3, type=float,
+                        help='Learning rate for optimizer')
+    parser.add_argument('--lr-decay', default=1.0, type=float,
+                        help='Decaying ratio of learning rate')
     parser.add_argument('--weight-decay', default=0.0, type=float,
                         help='Weight decay ratio')
     parser.add_argument('--criterion', default='acc', type=str,
@@ -161,82 +174,29 @@ def get_parser(parser=None, required=True):
                         help='Number of samples of attention to be saved')
     parser.add_argument('--grad-noise', type=strtobool, default=False,
                         help='The flag to switch to use noise injection to gradients during training')
-    # asr_mix related
-    parser.add_argument('--num-spkrs', default=1, type=int,
-                        choices=[1, 2],
-                        help='Number of speakers in the speech.')
-    parser.add_argument('--spa', action='store_true',
-                        help='Enable speaker parallel attention.')
-    parser.add_argument('--elayers-sd', default=4, type=int,
-                        help='Number of encoder layers for speaker '
-                             'differentiate part. (multi-speaker asr mode only)')
-    # decoder related
+    # speech translation related
     parser.add_argument('--context-residual', default=False, type=strtobool, nargs='?',
                         help='The flag to switch to use context vector residual in the decoder network')
-    parser.add_argument('--replace-sos', default=False, nargs='?',
-                        help='Replace <sos> in the decoder with a target language ID \
-                              (the first token in the target sequence)')
     # finetuning related
-    parser.add_argument('--enc-init', default=None, type=str,
+    parser.add_argument('--enc-init', default=None, type=str, nargs='?',
                         help='Pre-trained ASR model to initialize encoder.')
     parser.add_argument('--enc-init-mods', default='enc.enc.',
                         type=lambda s: [str(mod) for mod in s.split(',') if s != ''],
                         help='List of encoder modules to initialize, separated by a comma.')
-    parser.add_argument('--dec-init', default=None, type=str,
+    parser.add_argument('--dec-init', default=None, type=str, nargs='?',
                         help='Pre-trained ASR, MT or LM model to initialize decoder.')
     parser.add_argument('--dec-init-mods', default='att., dec.',
                         type=lambda s: [str(mod) for mod in s.split(',') if s != ''],
                         help='List of decoder modules to initialize, separated by a comma.')
-    # front end related
-    parser.add_argument('--use-frontend', type=strtobool, default=False,
-                        help='The flag to switch to use frontend system.')
 
-    # WPE related
-    parser.add_argument('--use-wpe', type=strtobool, default=False,
-                        help='Apply Weighted Prediction Error')
-    parser.add_argument('--wtype', default='blstmp', type=str,
-                        choices=['lstm', 'blstm', 'lstmp', 'blstmp', 'vgglstmp', 'vggblstmp', 'vgglstm', 'vggblstm',
-                                 'gru', 'bgru', 'grup', 'bgrup', 'vgggrup', 'vggbgrup', 'vgggru', 'vggbgru'],
-                        help='Type of encoder network architecture '
-                             'of the mask estimator for WPE. '
-                             '')
-    parser.add_argument('--wlayers', type=int, default=2,
-                        help='')
-    parser.add_argument('--wunits', type=int, default=300,
-                        help='')
-    parser.add_argument('--wprojs', type=int, default=300,
-                        help='')
-    parser.add_argument('--wdropout-rate', type=float, default=0.0,
-                        help='')
-    parser.add_argument('--wpe-taps', type=int, default=5,
-                        help='')
-    parser.add_argument('--wpe-delay', type=int, default=3,
-                        help='')
-    parser.add_argument('--use-dnn-mask-for-wpe', type=strtobool,
-                        default=False,
-                        help='Use DNN to estimate the power spectrogram. '
-                             'This option is experimental.')
-    # Beamformer related
-    parser.add_argument('--use-beamformer', type=strtobool,
-                        default=True, help='')
-    parser.add_argument('--btype', default='blstmp', type=str,
-                        choices=['lstm', 'blstm', 'lstmp', 'blstmp', 'vgglstmp', 'vggblstmp', 'vgglstm', 'vggblstm',
-                                 'gru', 'bgru', 'grup', 'bgrup', 'vgggrup', 'vggbgrup', 'vgggru', 'vggbgru'],
-                        help='Type of encoder network architecture '
-                             'of the mask estimator for Beamformer.')
-    parser.add_argument('--blayers', type=int, default=2,
-                        help='')
-    parser.add_argument('--bunits', type=int, default=300,
-                        help='')
-    parser.add_argument('--bprojs', type=int, default=300,
-                        help='')
-    parser.add_argument('--badim', type=int, default=320,
-                        help='')
-    parser.add_argument('--ref-channel', type=int, default=-1,
-                        help='The reference channel used for beamformer. '
-                             'By default, the channel is estimated by DNN.')
-    parser.add_argument('--bdropout-rate', type=float, default=0.0,
-                        help='')
+    # multilingual related
+    parser.add_argument('--multilingual', default=False, type=strtobool,
+                        help='Prepend target language ID to the source sentence. \
+                        Both source/target language IDs must be prepend in the pre-processing stage.')
+    parser.add_argument('--replace-sos', default=False, type=strtobool,
+                        help='Replace <sos> in the decoder with a target language ID \
+                              (the first token in the target sequence)')
+
     # Feature transform: Normalization
     parser.add_argument('--stats-file', type=str, default=None,
                         help='The stats file for the feature normalization')
@@ -273,7 +233,7 @@ def main(cmd_args):
 
     from espnet.utils.dynamic_import import dynamic_import
     if args.model_module is None:
-        model_module = "espnet.nets." + args.backend + "_backend.e2e_asr:E2E"
+        model_module = "espnet.nets." + args.backend + "_backend.e2e_st:E2E"
     else:
         model_module = args.model_module
     model_class = dynamic_import(model_module)
@@ -340,22 +300,11 @@ def main(cmd_args):
     # train
     logging.info('backend = ' + args.backend)
 
-    if args.num_spkrs == 1:
-        if args.backend == "chainer":
-            from espnet.asr.chainer_backend.asr import train
-            train(args)
-        elif args.backend == "pytorch":
-            from espnet.asr.pytorch_backend.asr import train
-            train(args)
-        else:
-            raise ValueError("Only chainer and pytorch are supported.")
+    if args.backend == "pytorch":
+        from espnet.st.pytorch_backend.xlm_st import train
+        train(args)
     else:
-        # FIXME(kamo): Support --model-module
-        if args.backend == "pytorch":
-            from espnet.asr.pytorch_backend.asr_mix import train
-            train(args)
-        else:
-            raise ValueError("Only pytorch is supported.")
+        raise ValueError("Only pytorch are supported.")
 
 
 if __name__ == '__main__':
