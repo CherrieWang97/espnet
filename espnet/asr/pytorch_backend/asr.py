@@ -108,10 +108,9 @@ class CustomEvaluator(BaseEvaluator):
         summary = reporter_module.DictSummary()
 
         self.model.eval()
-        self.model.bert.eval()
         with torch.no_grad():
             for batch in it:
-                x = tuple(arr for arr in batch)
+                x = tuple(arr.to(self.device) for arr in batch)
                 observation = {}
                 with reporter_module.report_scope(observation):
                     # read scp files
@@ -121,7 +120,6 @@ class CustomEvaluator(BaseEvaluator):
 
                 summary.add(observation)
         self.model.train()
-        self.model.bert.train()
 
         return summary.compute_mean()
 
@@ -166,7 +164,7 @@ class CustomUpdater(StandardUpdater):
         batch = train_iter.next()
         self.iteration += 1
 
-        x = tuple(arr for arr in batch)
+        x = tuple(arr.to(self.device) for arr in batch)
 
         # Compute the loss at this time step and accumulate it
         loss = self.model(*x).mean() / self.accum_grad
@@ -203,8 +201,6 @@ class CustomUpdater(StandardUpdater):
         self.update_core()
         # #iterations with accum_grad > 1
         # Ref.: https://github.com/espnet/espnet/issues/777
-        if self.forward_count == 0:
-            self.iteration += 1
 
 
 class CustomConverter(object):
@@ -416,7 +412,7 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
-
+    logging.warning('train data size: {}'.format(len(train)))
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
@@ -429,6 +425,7 @@ def train(args):
     # actual bathsize is included in a list
     # default collate function converts numpy array to pytorch tensor
     # we used an empty collate function instead which returns list
+    #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
         batch_size=1, num_workers=args.n_iter_processes,
@@ -458,6 +455,7 @@ def train(args):
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
+    """
     if args.num_save_attention > 0 and args.mtlalpha != 1.0:
         data = sorted(list(valid_json.items())[:args.num_save_attention],
                       key=lambda x: int(x[1]['input'][0]['shape'][1]), reverse=True)
@@ -473,7 +471,8 @@ def train(args):
         trainer.extend(att_reporter, trigger=(1, 'epoch'))
     else:
         att_reporter = None
-
+    """
+    att_reporter = None
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
                                           'main/loss_ctc', 'validation/main/loss_ctc',
