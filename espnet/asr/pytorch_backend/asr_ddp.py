@@ -12,7 +12,6 @@ import logging
 import math
 import os
 import sys
-import pdb
 import random
 import time
 import shutil
@@ -30,37 +29,16 @@ import torch.multiprocessing as mp
 import torch.utils.data.distributed
 
 from espnet.asr.asr_utils import adadelta_eps_decay
-from espnet.asr.asr_utils import add_results_to_json
-from espnet.asr.asr_utils import CompareValueTrigger
 from espnet.asr.asr_utils import get_model_conf
-from espnet.asr.asr_utils import plot_spectrogram
-from espnet.asr.asr_utils import restore_snapshot
-from espnet.asr.asr_utils import snapshot_object
-from espnet.asr.asr_utils import torch_load
-from espnet.asr.asr_utils import torch_resume
-from espnet.asr.asr_utils import torch_snapshot
 from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
-import espnet.lm.pytorch_backend.extlm as extlm_pytorch
 from espnet.nets.asr_interface import ASRInterface
 from espnet.nets.pytorch_backend.e2e_asr import pad_list
-import espnet.nets.pytorch_backend.lm.default as lm_pytorch
-from espnet.nets.pytorch_backend.streaming.segment import SegmentStreamingE2E
-from espnet.nets.pytorch_backend.streaming.window import WindowStreamingE2E
-from espnet.transform.spectrogram import IStft
-from espnet.transform.transformation import Transformation
-from espnet.utils.cli_writers import file_writer_helper
-from espnet.utils.dataset import ChainerDataLoader
 from espnet.utils.dataset import TransformDataset
 from espnet.utils.deterministic_utils import set_deterministic_pytorch
 from espnet.utils.dynamic_import import dynamic_import
 from espnet.utils.io_utils import LoadInputsAndTargets
 from espnet.utils.training.batchfy import make_batchset
-from espnet.utils.training.evaluator import BaseEvaluator
-from espnet.utils.training.iterators import ShufflingEnabler
-from espnet.utils.training.tensorboard_logger import TensorboardLogger
-from espnet.utils.training.train_utils import check_early_stop
-from espnet.utils.training.train_utils import set_early_stop
 
 import matplotlib
 matplotlib.use('Agg')
@@ -69,6 +47,22 @@ if sys.version_info[0] == 2:
     from itertools import izip_longest as zip_longest
 else:
     from itertools import zip_longest as zip_longest
+
+class RedirectStdout:
+    def __init__(self):
+        self.content = ''
+        self.savedStdout = sys.stdout
+        self.fileObj = None
+    def write(self, outStr):
+        self.content += outStr
+
+    def toFile(self, filename):
+        self.fileObj = open(filename, 'a+', 1)
+        sys.stdout = self.fileObj  
+  
+    def restore(self):
+        self.content = ''
+        self.fileObj.close()
 
 class AverageMeter(object):
     """Compute and storesthe average and current value"""
@@ -180,6 +174,11 @@ def dist_train(gpu, args):
     """Initialize torch.distributed."""
     args.gpu = gpu
     args.rank = gpu
+    if not os.path.exists(args.outdir):
+        os.makedirs(args.outdir)
+    redirObj = RedirectStdout()
+    sys.stdout = redirObj
+    redirObj.toFile(args.outdir + 'log')
     best_acc = 0
     if args.gpu is not None:
         print('Use GPU: {} for training'.format(args.gpu))
@@ -190,12 +189,27 @@ def dist_train(gpu, args):
         backend='nccl', world_size=args.ngpu, rank=args.gpu,
         init_method=init_method)
     torch.cuda.set_device(args.gpu)
+    converter = CustomConverter(args.gpu)
+    with open(args.train_json, 'rb') as f:
+        train_json = json.load(f)['utts']
+    with open(args.valid_json, 'rb') as f:
+        valid_json = json.load(f)['utts']
+    utts = list(valid_json.keys())
+    idim = int(valid_json[utts[0]]['input'][0]['shape'][-1])
+    odim = int(valid_json[utts[0]]['output'][0]['shape'][-1])
+    print('#input dims : ' + str(idim))
+    print('#output dims: ' + str(odim))
     print('initialize model on gpu: {}'.format(args.gpu))
     if args.enc_init is not None or args.dec_init is not None:
-        model = load_trained_modules(83, 106, args)
+        model = load_trained_modules(idim, odim, args)
     else:
         model_class = dynamic_import(args.model_module)
-        model = model_class(83, 106, args)
+        model = model_class(idim, odim, args)
+    model_conf = args.outdir + '/model.json'
+    with open(model_conf, 'wb') as f:
+        print('writing a model config file to ' + model_conf)
+        f.write(json.dumps((idim, odim, vars(args)),
+                           indent=4, ensure_ascii=False, sort_keys=True).encode('utf_8'))
     model.cuda(args.gpu)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
     if args.opt == 'adadelta':
@@ -210,12 +224,6 @@ def dist_train(gpu, args):
         optimizer = get_std_opt(model, args.adim, args.transformer_warmup_steps, args.transformer_lr)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
-    print('initialize data sampler')
-    converter = CustomConverter(args.gpu)
-    with open(args.train_json, 'rb') as f:
-        train_json = json.load(f)['utts']
-    with open(args.valid_json, 'rb') as f:
-        valid_json = json.load(f)['utts']
     train = make_batchset(train_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -294,7 +302,9 @@ def dist_train(gpu, args):
                 'state_dict': model.state_dict(),
                 'best_acc': best_acc,
                 'optimizer': optimizer.state_dict(),
-            }, is_best, filename='snapshot.ep.{}'.format(epoch))
+            }, is_best, filename=os.path.join(args.outdir, 'snapshot.ep.{}'.format(epoch)))
+    log_file.close()
+
 
 def save_checkpoint(state, is_best, filename):
     torch.save(state, filename)
@@ -321,8 +331,9 @@ def train_epoch(train_loader, model, optimizer, epoch, args):
         grad_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), args.grad_clip)
         optimizer.step()
-        batch_time.update(time.time() - start)
-        if i % args.report_interval_iters == 0:
+        if i % args.report_interval_iters == 0 and args.rank == 0:
+            batch_time.update(time.time() - start)
+            start = time.time()
             progress.display(i)                
 
 def validate(valid_loader, model, args):
