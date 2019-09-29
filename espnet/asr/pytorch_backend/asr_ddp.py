@@ -108,67 +108,32 @@ class ProgressMeter(object):
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches)+']'
 
+class CustomSampler(torch.utils.data.Sampler):
+    def __init__(self, dataset, load_fn, num_replicas=None, rank=None):
+        self.dataset = dataset
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.epoch = 0
+        self.num_samples = int(math.ceil(len(self.dataset) * 1.0 / self.num_replicas))
+        self.total_size = self.num_samples * self.num_replicas
+        self.load_fn = load_fn
 
-class CustomUpdater(StandardUpdater):
-    """Custom Updater for Pytorch.
+    def __iter__(self):
+        g = torch.Generator()
+        g.manual_seed(self.epoch)
+        indices = torch.randperm(len(self.dataset), generator=g).tolist()
+        indices += indices[:(self.total_size - len(indices))]
+        assert len(indices) == self.total_size
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        assert len(indices) == self.num_samples
 
-    Args:
-        model (torch.nn.Module): The model to update.
-        grad_clip_threshold (float): The gradient clipping value to use.
-        train_iter (chainer.dataset.Iterator): The training iterator.
-        optimizer (torch.optim.optimizer): The training optimizer.
+        return iter(indices)
 
-        device (torch.device): The device to use.
-        ngpu (int): The number of gpus to use.
-        use_apex (bool): The flag to use Apex in backprop.
+    def __len__(self):
+        return self.num_samples
 
-    """
-
-    def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
-        super(CustomUpdater, self).__init__(train_iter, optimizer)
-        self.model = model
-        self.grad_clip_threshold = grad_clip_threshold
-        self.device = device
-        self.ngpu = ngpu
-        self.accum_grad = accum_grad
-        self.forward_count = 0
-        self.grad_noise = grad_noise
-        self.iteration = 0
-        self.use_apex = use_apex
-
-    # The core part of the update routine can be customized by overriding.
-    def update_core(self):
-        """Main update routine of the CustomUpdater."""
-        # When we pass one iterator and optimizer to StandardUpdater.__init__,
-        # they are automatically named 'main'.
-        train_iter = self.get_iterator('main')
-        optimizer = self.get_optimizer('main')
-
-        # Get the next batch ( a list of json files)
-        batch = train_iter.next()
-        self.iteration += 1
-
-        x = tuple(arr.to(self.device) for arr in batch)
-
-        # Compute the loss at this time step and accumulate it
-        loss = self.model(*x).mean() / self.accum_grad
-        loss.backward()
-        loss.detach()  # Truncate the graph
-
-        # update parameters
-        self.forward_count = 0
-        # compute the gradient norm to check if it is normal or not
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), self.grad_clip_threshold)
-        logging.info('grad norm={}'.format(grad_norm))
-        if math.isnan(grad_norm):
-            logging.warning('grad norm is nan. Do not update model.')
-        else:
-            optimizer.step()
-        optimizer.zero_grad()
-
-
+    def set_epoch(self, epoch):
+        self.epoch = epoch
 
 class CustomConverter(object):
     """Custom batch converter for Pytorch.
@@ -179,13 +144,14 @@ class CustomConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32):
+    def __init__(self, device, subsampling_factor=1, dtype=torch.float32):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
+        self.device = device
 
-    def __call__(self, batch, device):
+    def __call__(self, batch):
         """Transform a batch and send it to a device.
 
         Args:
@@ -211,34 +177,35 @@ class CustomConverter(object):
         # currently only support real number
         if xs[0].dtype.kind == 'c':
             xs_pad_real = pad_list(
-                [torch.from_numpy(x.real).float() for x in xs], 0).to(self.dtype)#.cuda(device, non_blocking=True)
+                [torch.from_numpy(x.real).float() for x in xs], 0).to(self.dtype).cuda(self.device, non_blocking=True)
             xs_pad_imag = pad_list(
-                [torch.from_numpy(x.imag).float() for x in xs], 0).to(self.dtype)#.cuda(device, non_blocking=True)
+                [torch.from_numpy(x.imag).float() for x in xs], 0).to(self.dtype).cuda(self.device, non_blocking=True)
             # Note(kamo):
             # {'real': ..., 'imag': ...} will be changed to ComplexTensor in E2E.
             # Don't create ComplexTensor and give it E2E here
             # because torch.nn.DataParellel can't handle it.
             xs_pad = {'real': xs_pad_real, 'imag': xs_pad_imag}
         else:
-            xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(self.dtype)#.cuda(device, non_blocking=True)
+            xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(self.dtype).cuda(self.device, non_blocking=True)
 
-        ilens = torch.from_numpy(ilens)#.cuda(device, non_blocking=True)
+        ilens = torch.from_numpy(ilens).cuda(self.device, non_blocking=True)
         # NOTE: this is for multi-task learning (e.g., speech translation)
         if isinstance(ys[0], tuple):
             ys_pad_0 = pad_list([torch.from_numpy(np.array(y[0])).long() for y in ys],
-                                self.ignore_id)#.cuda(device, non_blocking=True)
+                                self.ignore_id).cuda(self.device, non_blocking=True)
             ys_pad_1 = pad_list([torch.from_numpy(np.array(y[1])).long() for y in ys],
-                                0)#.cuda(non_blocking=True)
+                                0).cuda(self.device, non_blocking=True)
             return xs_pad, ilens, ys_pad_0, ys_pad_1
         else:
             ys_pad = pad_list([torch.from_numpy(y).long()
-                               for y in ys], self.ignore_id).cuda(device, non_blocking=True)
+                               for y in ys], self.ignore_id).cuda(self.device, non_blocking=True)
 
         return xs_pad, ilens, ys_pad
 
-def dist_train(gpu, args, train_dataset, valid_dataset):
+def dist_train(gpu, args):
     """Initialize torch.distributed."""
     args.gpu = gpu
+    args.rank = gpu
     if args.gpu is not None:
         print('Use GPU: {} for training'.format(args.gpu))
 
@@ -269,8 +236,7 @@ def dist_train(gpu, args, train_dataset, valid_dataset):
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
     print('initialize data sampler')
-    converter = CustomConverter()
-    """
+    converter = CustomConverter(args.gpu)
     with open(args.train_json, 'rb') as f:
         train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
@@ -300,16 +266,27 @@ def dist_train(gpu, args, train_dataset, valid_dataset):
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
-    """
-    train_dataset = TransformDataset(train_dataset, lambda data: converter(data, device=args.gpu))
-    valid_dataset = TransformDataset(valid_dataset, lambda data: converter(data, device=args.gpu))
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    num_samples = int(math.ceil(len(train) * 1.0 / args.ngpu))
+    total_len = num_samples * args.ngpu
+    g = torch.Generator()
+    g.manual_seed(args.seed)
+    indices = torch.randperm(len(train), generator=g).tolist()
+    indices += indices[:(total_len - len(indices))]
+    assert len(indices) == total_len
+    indices = indices[args.rank:total_len:args.ngpu]
+    assert len(indices) == num_samples
+    train_dataset = []
+    for i in indices:
+        train_dataset.append(load_tr(train[i]))
+    train_dataset = TransformDataset(train_dataset, converter)
+    valid_dataset = TransformDataset(valid, lambda data: converter(load_cv(data)))
+    #train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=1, shuffle=False,
-        num_workers=0, pin_memory=True, sampler=train_sampler)
+        train_dataset, batch_size=1, shuffle=True,
+        num_workers=0, pin_memory=False)
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset, batch_size=1, shuffle=False,
-        num_workers=0, pin_memory=True)
+        num_workers=0, pin_memory=False)
 
     start_epoch = 0
 
@@ -326,28 +303,34 @@ def dist_train(gpu, args, train_dataset, valid_dataset):
         start_epoch = 0
 
     for epoch in range(start_epoch, args.epochs):
-        train_sampler.set_epoch(epoch)
         train_epoch(train_loader, model, optimizer, epoch, args)
 
 def train_epoch(train_loader, model, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':6.3f')
-    acc = AverageMeter('Acc', ':6.2f')
+    acc_meter = AverageMeter('Acc', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, losses, acc],
+        [batch_time, data_time, losses, acc_meter],
         prefix="Epoch: [{}] GPU: [{}]".format(epoch, args.gpu))
     model.train()
     start = time.time()
     for i, (xs, ilens, ys, ys_asr_pad) in enumerate(train_loader):
+        """
         xs = xs[0].cuda(args.gpu, non_blocking=True)
         ilens = ilens[0].cuda(args.gpu, non_blocking=True)
         ys = ys[0].cuda(args.gpu, non_blocking=True)
         ys_asr_pad = ys_asr_pad.cuda(args.gpu, non_blocking=True)
-        loss = model(xs, ilens, ys)
+        """
+        data_time.update(time.time() - start)
+        loss, acc = model(xs[0], ilens[0], ys[0])
         losses.update(loss.item())
+        acc_meter.update(acc)
         optimizer.zero_grad()
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), args.grad_clip)
         optimizer.step()
         batch_time.update(time.time() - start)
         if i % args.report_interval_iters == 0:
@@ -366,6 +349,7 @@ def train(args):
         logging.warning('no gpu detected')
         exit(0)
     args.port = random.randint(10000, 20000)
+    """
     with open(args.train_json, 'rb') as f:
         train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
@@ -395,10 +379,10 @@ def train(args):
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
-    train_data = [load_tr(data) for data in train]
-    valid_data = [load_cv(data) for data in valid]
-    #train_dataset = TransformDataset(train, lambda data: converter(load_tr(data), device=args.gpu))
-    #valid_dataset = TransformDataset(valid, lambda data: converter(load_cv(data), device=args.gpu))
-    mp.spawn(dist_train, nprocs=args.ngpu, args=(args, train_data, valid_data))
+    train_dataset
+    train_dataset = TransformDataset(train, lambda data: converter(load_tr(data)))
+    valid_dataset = TransformDataset(valid, lambda data: converter(load_cv(data)))
+    """
+    mp.spawn(dist_train, nprocs=args.ngpu, args=(args,))
 
     #dist_main(0, args)
