@@ -15,6 +15,7 @@ import sys
 import pdb
 import random
 import time
+import shutil
 
 from chainer import reporter as reporter_module
 from chainer import training
@@ -108,33 +109,6 @@ class ProgressMeter(object):
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches)+']'
 
-class CustomSampler(torch.utils.data.Sampler):
-    def __init__(self, dataset, load_fn, num_replicas=None, rank=None):
-        self.dataset = dataset
-        self.num_replicas = num_replicas
-        self.rank = rank
-        self.epoch = 0
-        self.num_samples = int(math.ceil(len(self.dataset) * 1.0 / self.num_replicas))
-        self.total_size = self.num_samples * self.num_replicas
-        self.load_fn = load_fn
-
-    def __iter__(self):
-        g = torch.Generator()
-        g.manual_seed(self.epoch)
-        indices = torch.randperm(len(self.dataset), generator=g).tolist()
-        indices += indices[:(self.total_size - len(indices))]
-        assert len(indices) == self.total_size
-        indices = indices[self.rank:self.total_size:self.num_replicas]
-        assert len(indices) == self.num_samples
-
-        return iter(indices)
-
-    def __len__(self):
-        return self.num_samples
-
-    def set_epoch(self, epoch):
-        self.epoch = epoch
-
 class CustomConverter(object):
     """Custom batch converter for Pytorch.
 
@@ -144,12 +118,13 @@ class CustomConverter(object):
 
     """
 
-    def __init__(self, device, subsampling_factor=1, dtype=torch.float32):
+    def __init__(self, device, subsampling_factor=1, dtype=torch.float32, task='asr'):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
         self.device = device
+        self.task = task
 
     def __call__(self, batch):
         """Transform a batch and send it to a device.
@@ -190,22 +165,22 @@ class CustomConverter(object):
 
         ilens = torch.from_numpy(ilens).cuda(self.device, non_blocking=True)
         # NOTE: this is for multi-task learning (e.g., speech translation)
-        if isinstance(ys[0], tuple):
-            ys_pad_0 = pad_list([torch.from_numpy(np.array(y[0])).long() for y in ys],
-                                self.ignore_id).cuda(self.device, non_blocking=True)
-            ys_pad_1 = pad_list([torch.from_numpy(np.array(y[1])).long() for y in ys],
-                                0).cuda(self.device, non_blocking=True)
-            return xs_pad, ilens, ys_pad_0, ys_pad_1
+        ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
+                          for y in ys], self.ignore_id).cuda(self.device, non_blocking=True)
+        if self.task == "asr":
+            return xs_pad, ilens, ys_pad
+        elif self.task == "st":
+            ys_pad_asr = pad_list([torch.from_numpy(np.array(y[1])).long()
+                                  for y in ys], 0).cuda(self.device, non_blocking=True)
+            return xs_pad, ilens, ys_pad, ys_pad_asr
         else:
-            ys_pad = pad_list([torch.from_numpy(y).long()
-                               for y in ys], self.ignore_id).cuda(self.device, non_blocking=True)
-
-        return xs_pad, ilens, ys_pad
+            raise ValueError('Support only asr and st data')
 
 def dist_train(gpu, args):
     """Initialize torch.distributed."""
     args.gpu = gpu
     args.rank = gpu
+    best_acc = 0
     if args.gpu is not None:
         print('Use GPU: {} for training'.format(args.gpu))
 
@@ -266,11 +241,12 @@ def dist_train(gpu, args):
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
-    num_samples = int(math.ceil(len(train) * 1.0 / args.ngpu))
+    """
+    num_samples = int(math.ceil(len(valid) * 1.0 / args.ngpu))
     total_len = num_samples * args.ngpu
     g = torch.Generator()
     g.manual_seed(args.seed)
-    indices = torch.randperm(len(train), generator=g).tolist()
+    indices = torch.randperm(len(valid), generator=g).tolist()
     indices += indices[:(total_len - len(indices))]
     assert len(indices) == total_len
     indices = indices[args.rank:total_len:args.ngpu]
@@ -278,12 +254,14 @@ def dist_train(gpu, args):
     train_dataset = []
     for i in indices:
         train_dataset.append(load_tr(train[i]))
-    train_dataset = TransformDataset(train_dataset, converter)
+    print(train_dataset[0])
+    """
+    train_dataset = TransformDataset(train, lambda data: converter(load_tr(data)))
     valid_dataset = TransformDataset(valid, lambda data: converter(load_cv(data)))
-    #train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=1, shuffle=True,
-        num_workers=0, pin_memory=False)
+        train_dataset, batch_size=1, shuffle=False,
+        num_workers=0, pin_memory=False, sampler=train_sampler)
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset, batch_size=1, shuffle=False,
         num_workers=0, pin_memory=False)
@@ -303,28 +281,39 @@ def dist_train(gpu, args):
         start_epoch = 0
 
     for epoch in range(start_epoch, args.epochs):
+        train_sampler.set_epoch(epoch)
         train_epoch(train_loader, model, optimizer, epoch, args)
+        acc = validate(valid_loader, model, args)
+        is_best = acc > best_acc
+        best_acc = max(acc, best_acc)
+
+        if args.rank == 0:
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.model_module,
+                'state_dict': model.state_dict(),
+                'best_acc': best_acc,
+                'optimizer': optimizer.state_dict(),
+            }, is_best, filename='snapshot.ep.{}'.format(epoch))
+
+def save_checkpoint(state, is_best, filename):
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, 'model.acc.best')
 
 def train_epoch(train_loader, model, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':6.3f')
     acc_meter = AverageMeter('Acc', ':6.2f')
     progress = ProgressMeter(
         len(train_loader),
-        [batch_time, data_time, losses, acc_meter],
+        [batch_time, losses, acc_meter],
         prefix="Epoch: [{}] GPU: [{}]".format(epoch, args.gpu))
     model.train()
     start = time.time()
-    for i, (xs, ilens, ys, ys_asr_pad) in enumerate(train_loader):
-        """
-        xs = xs[0].cuda(args.gpu, non_blocking=True)
-        ilens = ilens[0].cuda(args.gpu, non_blocking=True)
-        ys = ys[0].cuda(args.gpu, non_blocking=True)
-        ys_asr_pad = ys_asr_pad.cuda(args.gpu, non_blocking=True)
-        """
-        data_time.update(time.time() - start)
-        loss, acc = model(xs[0], ilens[0], ys[0])
+    for i, batch in enumerate(train_loader):
+        x = tuple(arr[0] for arr in batch)
+        loss, acc = model(*x)
         losses.update(loss.item())
         acc_meter.update(acc)
         optimizer.zero_grad()
@@ -335,10 +324,28 @@ def train_epoch(train_loader, model, optimizer, epoch, args):
         batch_time.update(time.time() - start)
         if i % args.report_interval_iters == 0:
             progress.display(i)                
-            #print(dict(model.module.named_parameters())['decoder.output_layer.weight'])
-            #return
 
-
+def validate(valid_loader, model, args):
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':6.3f')
+    acc_meter = AverageMeter('Acc', ':6.2f')
+    progress = ProgressMeter(
+        len(valid_loader),
+        [batch_time, losses, acc_meter],
+        prefix="Test: GPU: [{}]".format(args.gpu))
+    model.eval()
+    with torch.no_grad():
+        start = time.time()
+        for i, batch in enumerate(valid_loader):
+            batch = tuple(arr[0] for arr in batch)
+            loss, acc = model(*batch)
+            losses.update(loss.item())
+            acc_meter.update(acc)
+            batch_time.update(time.time()-start)
+    progress.display(len(valid_loader))
+    return acc_meter.avg
+            
+        
 def train(args):
     """Main training program."""
     if args.ngpu == 0:
@@ -349,40 +356,5 @@ def train(args):
         logging.warning('no gpu detected')
         exit(0)
     args.port = random.randint(10000, 20000)
-    """
-    with open(args.train_json, 'rb') as f:
-        train_json = json.load(f)['utts']
-    with open(args.valid_json, 'rb') as f:
-        valid_json = json.load(f)['utts']
-    train = make_batchset(train_json, args.batch_size,
-                          args.maxlen_in, args.maxlen_out, args.minibatches,
-                          min_batch_size=args.ngpu if args.ngpu > 1 else 1,
-                          shortest_first=False,
-                          count=args.batch_count,
-                          batch_bins=args.batch_bins,
-                          batch_frames_in=args.batch_frames_in,
-                          batch_frames_out=args.batch_frames_out,
-                          batch_frames_inout=args.batch_frames_inout)
-    valid = make_batchset(valid_json, args.batch_size,
-                          args.maxlen_in, args.maxlen_out, args.minibatches,
-                          min_batch_size=args.ngpu if args.ngpu > 1 else 1,
-                          count=args.batch_count,
-                          batch_bins=args.batch_bins,
-                          batch_frames_in=args.batch_frames_in,
-                          batch_frames_out=args.batch_frames_out,
-                          batch_frames_inout=args.batch_frames_inout)
-    load_tr = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
-        preprocess_args={'train': True}  # Switch the mode of preprocessing
-    )
-    load_cv = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
-        preprocess_args={'train': False}  # Switch the mode of preprocessing
-    )
-    train_dataset
-    train_dataset = TransformDataset(train, lambda data: converter(load_tr(data)))
-    valid_dataset = TransformDataset(valid, lambda data: converter(load_cv(data)))
-    """
     mp.spawn(dist_train, nprocs=args.ngpu, args=(args,))
 
-    #dist_main(0, args)
