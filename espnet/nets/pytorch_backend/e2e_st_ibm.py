@@ -128,9 +128,9 @@ class E2E(STInterface, torch.nn.Module):
             attention_dropout_rate=args.transformer_attn_dropout_rate
         )
         self.xlm = XLMModel.from_pretrained('xlm-mlm-ende-1024')
-        self.s2tdense = torch.nn.Linear(args.adim, self.xlm.dim)
-        self.t2ddense = torch.nn.Linear(self.xlm.dim, args.adim)
-        self.pred = torch.nn.Linear(args.adim, odim)
+        self.s2tdense = torch.nn.Linear(args.adim, 1024)
+        self.t2ddense = torch.nn.Linear(1024, args.adim)
+        #self.pred = torch.nn.Linear(args.adim, odim)
         self.decoder = Decoder(
             odim=odim,
             attention_dim=args.adim,
@@ -143,7 +143,6 @@ class E2E(STInterface, torch.nn.Module):
             src_attention_dropout_rate=args.transformer_attn_dropout_rate
         )
         self.train()
-        self.xlm.train()
         # below means the last number becomes eos/os ID
         # note that sos/eos IDs are identical
         self.sos = odim - 1
@@ -166,7 +165,7 @@ class E2E(STInterface, torch.nn.Module):
                                                False)
         self.reset_parameters(args)
         self.adim = args.adim
-        self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type=args.ctc_type, reduce=True)
+        #self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type=args.ctc_type, reduce=True)
 
         # multilingual related
         self.multilingual = getattr(args, "multilingual", False)
@@ -239,9 +238,11 @@ class E2E(STInterface, torch.nn.Module):
         assert mask.size() == (bs, slen)
         return mask
 
-    def xlm_forward(self, x, xlens):
+    def xlm_forward(self, x, xlens=None):
         bs = x.size(0)
         slen = x.size(1)
+        if xlens is None:
+            xlens = torch.ones((bs), device=x.device).fill_(slen).long()
         mask = self.get_masks(slen, xlens)
         langs = torch.ones((bs, slen), dtype=torch.long, device=x.device)
         x = x + self.xlm.lang_embeddings(langs)
@@ -319,10 +320,10 @@ class E2E(STInterface, torch.nn.Module):
         #    loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
 
         # bert encoder forward
-        #hs_pad = self.s2tdense(hs_pad)
-        #enc_output = self.xlm_forward(hs_pad, hs_len)
+        hs_pad = self.s2tdense(hs_pad)
+        enc_output = self.xlm_forward(hs_pad, hs_len)
  
-        #hs_pad = self.t2ddense(enc_output)
+        hs_pad = self.t2ddense(enc_output)
         # decoder forward
         #logits = self.pred(hs_pad)
         #soft_logits = torch.softmax(logits, dim=-1)
@@ -366,21 +367,14 @@ class E2E(STInterface, torch.nn.Module):
         :rtype: torch.Tensor
         """
         self.eval()
-        ilens = [x.shape[0]]
+        feat = torch.as_tensor(x).cuda().unsqueeze(0)
+        enc_output, _ = self.encoder(feat, None)
+        hs_pad = self.s2tdense(enc_output)
+        hs_pad = self.xlm_forward(hs_pad)
+        hs_pad = self.t2ddense(hs_pad)
+        return hs_pad.squeeze(0)
 
-        # subsample frame
-        x = x[::self.subsample[0], :]
-        p = next(self.parameters())
-        h = torch.as_tensor(x, device=p.device, dtype=p.dtype)
-        # make a utt list (1) to use the same interface for encoder
-        hs = h.contiguous().unsqueeze(0)
-
-        # 1. encoder
-        hs, hlens, _ = self.senc(hs, ilens)
-        hs, _, _ = self.tenc(hs, hlens)
-        return hs.squeeze(0)
-
-    def translate(self, x, trans_args, char_list, rnnlm=None):
+    def recognize(self, feat, recog_args, char_list, rnnlm=None):
         """E2E beam search.
 
         :param ndarray x: input acoustic feature (T, D)
@@ -390,12 +384,132 @@ class E2E(STInterface, torch.nn.Module):
         :return: N-best decoding results
         :rtype: list
         """
-        hs = self.encode(x).unsqueeze(0)
-        lpz = None
+        enc_output = self.encode(feat).unsqueeze(0)
+        h = enc_output.squeeze(0)
 
-        # 2. Decoder
-        # decode the first utterance
-        y = self.dec.recognize_beam(hs[0], lpz, trans_args, char_list, rnnlm)
+        logging.info('input lengths: ' + str(h.size(0)))
+        # search parms
+        beam = recog_args.beam_size
+        penalty = recog_args.penalty
+        ctc_weight = recog_args.ctc_weight
+
+        # preprare sos
+        y = self.sos
+        vy = h.new_zeros(1).long()
+
+        if recog_args.maxlenratio == 0:
+            maxlen = h.shape[0]
+        else:
+            # maxlen >= 1
+            maxlen = max(1, int(recog_args.maxlenratio * h.size(0)))
+        minlen = int(recog_args.minlenratio * h.size(0))
+        logging.info('max output length: ' + str(maxlen))
+        logging.info('min output length: ' + str(minlen))
+
+        # initialize hypothesis
+        if rnnlm:
+            hyp = {'score': 0.0, 'yseq': [y], 'rnnlm_prev': None}
+        else:
+            hyp = {'score': 0.0, 'yseq': [y]}
+
+        hyps = [hyp]
+        ended_hyps = []
+
+        import six
+        traced_decoder = None
+        for i in six.moves.range(maxlen):
+            logging.debug('position ' + str(i))
+
+            hyps_best_kept = []
+            for hyp in hyps:
+                vy.unsqueeze(1)
+                vy[0] = hyp['yseq'][i]
+
+                # get nbest local scores and their ids
+                ys_mask = subsequent_mask(i + 1, device='cuda').unsqueeze(0)
+                ys = torch.tensor(hyp['yseq']).cuda().unsqueeze(0)
+                # FIXME: jit does not match non-jit result
+                local_att_scores = self.decoder.recognize(ys, ys_mask, enc_output)
+
+                local_scores = local_att_scores
+
+                local_best_scores, local_best_ids = torch.topk(local_scores, beam, dim=1)
+
+                for j in six.moves.range(beam):
+                    new_hyp = {}
+                    new_hyp['score'] = hyp['score'] + float(local_best_scores[0, j])
+                    new_hyp['yseq'] = [0] * (1 + len(hyp['yseq']))
+                    new_hyp['yseq'][:len(hyp['yseq'])] = hyp['yseq']
+                    new_hyp['yseq'][len(hyp['yseq'])] = int(local_best_ids[0, j])
+                    # will be (2 x beam) hyps at most
+                    hyps_best_kept.append(new_hyp)
+
+                hyps_best_kept = sorted(
+                    hyps_best_kept, key=lambda x: x['score'], reverse=True)[:beam]
+
+            # sort and get nbest
+            hyps = hyps_best_kept
+            logging.debug('number of pruned hypothes: ' + str(len(hyps)))
+            if char_list is not None:
+                logging.debug(
+                    'best hypo: ' + ''.join([char_list[int(x)] for x in hyps[0]['yseq'][1:]]))
+
+            # add eos in the final loop to avoid that there are no ended hyps
+            if i == maxlen - 1:
+                logging.info('adding <eos> in the last postion in the loop')
+                for hyp in hyps:
+                    hyp['yseq'].append(self.eos)
+
+            # add ended hypothes to a final list, and removed them from current hypothes
+            # (this will be a probmlem, number of hyps < beam)
+            remained_hyps = []
+            for hyp in hyps:
+                if hyp['yseq'][-1] == self.eos:
+                    # only store the sequence that has more than minlen outputs
+                    # also add penalty
+                    if len(hyp['yseq']) > minlen:
+                        hyp['score'] += (i + 1) * penalty
+                        if rnnlm:  # Word LM needs to add final <eos> score
+                            hyp['score'] += recog_args.lm_weight * rnnlm.final(
+                                hyp['rnnlm_prev'])
+                        ended_hyps.append(hyp)
+                else:
+                    remained_hyps.append(hyp)
+
+            # end detection
+            from espnet.nets.e2e_asr_common import end_detect
+            if end_detect(ended_hyps, i) and recog_args.maxlenratio == 0.0:
+                logging.info('end detected at %d', i)
+                break
+
+            hyps = remained_hyps
+            if len(hyps) > 0:
+                logging.debug('remeined hypothes: ' + str(len(hyps)))
+            else:
+                logging.info('no hypothesis. Finish decoding.')
+                break
+
+            if char_list is not None:
+                for hyp in hyps:
+                    logging.debug(
+                        'hypo: ' + ''.join([char_list[int(x)] for x in hyp['yseq'][1:]]))
+
+            logging.debug('number of ended hypothes: ' + str(len(ended_hyps)))
+
+        nbest_hyps = sorted(
+            ended_hyps, key=lambda x: x['score'], reverse=True)[:min(len(ended_hyps), recog_args.nbest)]
+
+        # check number of hypotheis
+        if len(nbest_hyps) == 0:
+            logging.warning('there is no N-best results, perform recognition again with smaller minlenratio.')
+            # should copy becasuse Namespace will be overwritten globally
+            recog_args = Namespace(**vars(recog_args))
+            recog_args.minlenratio = max(0.0, recog_args.minlenratio - 0.1)
+            return self.recognize(feat, recog_args, char_list, rnnlm)
+
+        logging.info('total log probability: ' + str(nbest_hyps[0]['score']))
+        logging.info('normalized log probability: ' + str(nbest_hyps[0]['score'] / len(nbest_hyps[0]['yseq'])))
+        return nbest_hyps
         return y
 
     def translate_batch(self, xs, trans_args, char_list, rnnlm=None):
