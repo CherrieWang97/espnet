@@ -232,7 +232,7 @@ def main(cmd_args):
     if args.model_module is None:
         model_module = "espnet.nets." + args.backend + "_backend.e2e_tcen:E2E"
     else:
-        raise ValueError("Only support for e2e_tcen")
+        model_module = args.model_module
 
     model_class = dynamic_import(model_module)
     model_class.add_arguments(parser)

@@ -13,6 +13,7 @@ import math
 import os
 import random
 import sys
+import pdb
 
 from chainer import training
 from chainer.training import extensions
@@ -37,7 +38,7 @@ from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTCustomConverter
 
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
-from espnet.nets.pytorch_backend.e2e_tcen import E2E
+from espnet.nets.pytorch_backend.e2e_transformer_multi import E2E
 import espnet.nets.pytorch_backend.lm.default as lm_pytorch
 from espnet.utils.dataset import ChainerDataLoader
 from espnet.utils.dataset import TransformDataset
@@ -181,10 +182,14 @@ def train(args):
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
     # get medium dimension info (medum dimension refer to the size of source vocabulary)
+    with open(args.st_train_json, 'rb') as f:
+        st_train_json = json.load(f)['utts']
+    with open(args.asr_train_json, 'rb') as f:
+        asr_train_json = json.load(f)['utts']
     with open(args.mt_train_json, 'rb') as f:
         mt_train_json = json.load(f)['utts']
-    utts = list(mt_train_json.keys())
-    mdim = int(mt_train_json[utts[0]]['output'][1]['shape'][1])
+    utts = list(asr_train_json.keys())
+    mdim = int(asr_train_json[utts[0]]['output'][0]['shape'][1])
     logging.info('#medium dims : ' + str(mdim))
 
     # Initialize with pre-trained ASR encoder and MT decoder
@@ -277,11 +282,6 @@ def train(args):
     mt_converter = MTCustomConverter()
 
     # read json data for st training data and asr training data
-    with open(args.st_train_json, 'rb') as f:
-        st_train_json = json.load(f)['utts']
-    with open(args.asr_train_json, 'rb') as f:
-        asr_train_json = json.load(f)['utts']
-
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     st_train = make_batchset(st_train_json, args.batch_size,
@@ -388,19 +388,17 @@ def train(args):
 
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/loss_st', 'validation/main/loss_st',
-                                          'main/loss_ctc', 'validation/main/loss_ctc',
-                                          'main/loss_mt', 'validation/main/loss_mt'],
+                                          'main/loss_asr', 'main/loss_mt'],
                                          'epoch', file_name='loss.png'))
-    trainer.extend(extensions.PlotReport(['main/acc', 'validation/main/acc'],
+    trainer.extend(extensions.PlotReport(['main/st_acc', 'main/asr_acc',
+                                          'main/mt_acc', 'validation/main/st_acc'],
                                          'epoch', file_name='acc.png'))
-    trainer.extend(extensions.PlotReport(['main/bleu', 'validation/main/bleu'],
-                                         'epoch', file_name='cer.png'))
 
     # Save best models
     trainer.extend(snapshot_object(model, 'model.loss.best'),
                    trigger=training.triggers.MinValueTrigger('validation/main/loss_st'))
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/st_acc'))
 
     # save snapshot which contains model and optimizer states
     trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
@@ -446,10 +444,10 @@ def train(args):
                                lambda best_value, current_value: best_value < current_value))
 
     # Write a log of evaluation statistics for each epoch
-    trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'main/loss_st', 'main/loss_ctc', 'main/loss_mt',
-                   'validation/main/loss_st', 'validation/main/loss_ctc', 'validation/main/loss_mt',
-                   'main/acc', 'validation/main/acc']
+    trainer.extend(extensions.LogReport(trigger=(100, 'iteration')))
+    report_keys = ['epoch', 'iteration', 'main/loss_st', 'main/loss_asr', 'main/loss_mt',
+                   'main/st_acc', 'main/asr_acc', 'main/mt_acc',
+                   'validation/main/loss_st', 'validation/main/st_acc']
     report_keys += ['elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
