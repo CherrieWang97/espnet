@@ -220,7 +220,7 @@ class E2E(ASRInterface, torch.nn.Module):
             self.reporter.report(loss_ctc_data, loss_att_data, acc, cer_ctc, cer, wer, loss_data)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
-        return self.loss, acc
+        return self.loss
 
     def scorers(self):
         """Scorers."""
@@ -306,7 +306,7 @@ class E2E(ASRInterface, torch.nn.Module):
                 vy[0] = hyp['yseq'][i]
 
                 # get nbest local scores and their ids
-                ys_mask = subsequent_mask(i + 1).cuda().unsqueeze(0)
+                ys_mask = subsequent_mask(i + 1, device='cuda').unsqueeze(0)
                 ys = torch.tensor(hyp['yseq']).cuda().unsqueeze(0)
                 # FIXME: jit does not match non-jit result
                 if use_jit:

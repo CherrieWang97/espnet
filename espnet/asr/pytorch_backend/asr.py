@@ -258,14 +258,7 @@ class CustomConverter(object):
 
         ilens = torch.from_numpy(ilens).to(device)
         # NOTE: this is for multi-task learning (e.g., speech translation)
-        if isinstance(ys[0], tuple):
-            ys_pad_0 = pad_list([torch.from_numpy(np.array(y[0])).long() for y in ys],
-                                self.ignore_id).to(device)
-            ys_pad_1 = pad_list([torch.from_numpy(np.array(y[1])).long() for y in ys],
-                                0).to(device)
-            return xs_pad, ilens, ys_pad_0, ys_pad_1
-        else:
-            ys_pad = pad_list([torch.from_numpy(y).long()
+        ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
                                for y in ys], self.ignore_id).to(device)
 
         return xs_pad, ilens, ys_pad
