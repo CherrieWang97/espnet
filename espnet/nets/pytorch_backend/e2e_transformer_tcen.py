@@ -138,7 +138,7 @@ class E2E(ASRInterface, torch.nn.Module):
             self_attention_dropout_rate=args.transformer_attn_dropout_rate,
             src_attention_dropout_rate=args.transformer_attn_dropout_rate
         )
-        self.embed = torch.nn.Embedding(idim, args.adim, padding_idx=self.ignore_id)
+        self.embed = torch.nn.Embedding(odim, args.adim, padding_idx=ignore_id)
         self.ctc = CTC(mdim, args.adim, args.dropout_rate, ctc_type=args.ctc_type, reduce=True)
         self.sos = odim - 1
         self.eos = odim - 1
@@ -176,6 +176,7 @@ class E2E(ASRInterface, torch.nn.Module):
                 if mt_n in param_dict.keys() and p.size() == param_dict[mt_n].size():
                     p.data = param_dict[mt_n].data
                     logging.warning('Overwrite %s from mt model' % n)
+            self.embed.weight = mt_model.encoder.embed[0].weight
 
         if args.report_cer or args.report_wer:
             from espnet.nets.e2e_asr_common import ErrorCalculator
@@ -205,11 +206,14 @@ class E2E(ASRInterface, torch.nn.Module):
         # 1. forward encoder
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-        if task == "st": or task == "asr":
+        if task == "st": 
             hs_pad, hs_mask = self.s_encoder(xs_pad, src_mask)
             hs_pad, hs_mask = self.t_encoder(hs_pad, hs_mask)
         elif task == "mt":
+            xs_pad = self.embed(xs_pad)
             hs_pad, hs_mask = self.t_encoder(xs_pad, src_mask)
+        else:
+            hs_pad, hs_mask = self.s_encoder(xs_pad, src_mask)
         self.hs_pad = hs_pad
 
         # 2. forward decoder
@@ -224,7 +228,6 @@ class E2E(ASRInterface, torch.nn.Module):
             batch_size = xs_pad.size(0)
             hs_len = hs_mask.view(batch_size, -1).sum(1)
             loss = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad)
-        self.pred_pad = pred_pad
 
         # 3. compute attention loss
         self.loss = loss

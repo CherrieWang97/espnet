@@ -38,7 +38,7 @@ from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTCustomConverter
 
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
-from espnet.nets.pytorch_backend.e2e_transformer_multi import E2E
+from espnet.nets.pytorch_backend.e2e_transformer_tcen import E2E
 import espnet.nets.pytorch_backend.lm.default as lm_pytorch
 from espnet.utils.dataset import ChainerDataLoader
 from espnet.utils.dataset import TransformDataset

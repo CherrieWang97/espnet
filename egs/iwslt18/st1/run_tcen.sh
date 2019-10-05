@@ -32,8 +32,8 @@ use_valbest_average=false     # if true, the validation `n_average`-best ST mode
                              # if false, the last `n_average` ST models will be averaged.
 
 # pre-training related
-asr_model=
-mt_model=
+asr_model=/teamscratch/tts_intern_experiment/v-chengw/data/ted/exp/asr_big_transformer/results/model.avg.best
+mt_model=exp/mt_transformer_big_bigwarm/results/model.acc.best
 
 # preprocessing related
 case=lc
@@ -279,7 +279,7 @@ if [ -z ${tag} ]; then
 else
     expname=${train_set}_${case}_${backend}_${tag}
 fi
-expname=st_multi
+expname=st_tcen_trans
 expdir=exp/${expname}
 mkdir -p ${expdir}
 
