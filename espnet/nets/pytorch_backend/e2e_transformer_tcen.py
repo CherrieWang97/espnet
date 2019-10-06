@@ -154,6 +154,7 @@ class E2E(ASRInterface, torch.nn.Module):
                                             args.transformer_length_normalized_loss)
         self.asr_criterion = LabelSmoothingLoss(self.mdim, self.ignore_id, args.lsm_weight,
                                                 args.transformer_length_normalized_loss)
+        self.lfn = torch.nn.KLDivLoss(reduce=False)
         # self.verbose = args.verbose
         self.reset_parameters(args)
         self.adim = args.adim
@@ -191,7 +192,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad, task='st'):
+    def forward(self, xs_pad, ilens, ys_pad, ys_pad_asr=None, ylens=None, task='st'):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -205,6 +206,7 @@ class E2E(ASRInterface, torch.nn.Module):
         """
         # 1. forward encoder
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
+        batch_size = xs_pad.size(0)
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
         if task == "st": 
             hs_pad, hs_mask = self.s_encoder(xs_pad, src_mask)
@@ -224,14 +226,24 @@ class E2E(ASRInterface, torch.nn.Module):
             loss = self.criterion(pred_pad, ys_out_pad)
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad,
                               ignore_label=self.ignore_id)
+            if acc < 0.80 and task == "st":
+                ys_pad_asr = ys_pad_asr[:, :max(ylens)]
+                ys_mask_asr = (~make_pad_mask(ylens.tolist())).to(ys_pad_asr.device).unsqueeze(-2)
+                ys_pad_asr = self.embed(ys_pad_asr)
+                hs_pad_asr, hs_mask_asr = self.t_encoder(ys_pad_asr, ys_mask_asr)
+                pred_pad_asr, pred_mask_asr = self.decoder(ys_in_pad, ys_mask, hs_pad_asr, hs_mask_asr)
+                loss_mt = self.criterion(pred_pad_asr, ys_out_pad)
+                mt_dist = pred_pad_asr.clone()
+                st_dist = pred_pad.clone()
+                mask = ys_out_pad == self.ignore_id
+                loss_kd = self.lfn(torch.log_softmax(st_dist, dim=-1), torch.softmax(mt_dist, dim=-1))
+                loss = loss_kd.masked_fill(mask.unsqueeze(-1), 0).sum() / batch_size
         else:
-            batch_size = xs_pad.size(0)
             hs_len = hs_mask.view(batch_size, -1).sum(1)
             loss = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad)
 
-        # 3. compute attention loss
-        self.loss = loss
         # copyied from e2e_asr
+        self.loss = loss
         loss_st_data = None
         loss_asr_data = None
         loss_mt_data = None

@@ -65,7 +65,7 @@ class CustomConverter(object):
         # in ASR. However, blank labels are not used in NMT. To keep the vocabulary size,
         # we use index:0 for padding instead of adding one more class.
 
-    def __call__(self, batch, device=torch.device('cpu')):
+    def __call__(self, batch, device=torch.device('cuda')):
         """Transform a batch and send it to a device.
 
         Args:
@@ -88,7 +88,7 @@ class CustomConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         ys_pad = pad_list([torch.from_numpy(y).long() for y in ys], self.ignore_id).to(device)
 
-        return xs_pad, ilens, ys_pad
+        return xs_pad, ilens, ys_pad, None, None
 
 
 def train(args):
@@ -116,7 +116,7 @@ def train(args):
     # specify model architecture
     model_class = dynamic_import(args.model_module)
     model = model_class(idim, odim, args)
-    assert isinstance(model, MTInterface)
+    #assert isinstance(model, MTInterface)
 
     if args.rnnlm is not None:
         rnnlm_args = get_model_conf(args.rnnlm, args.rnnlm_conf)
@@ -235,7 +235,7 @@ def train(args):
 
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer, device, args.ngpu, args.accum_grad, use_apex=use_apex)
+        model, args.grad_clip, train_iter, optimizer, device, args.ngpu, False, args.accum_grad, use_apex=use_apex)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -252,6 +252,7 @@ def train(args):
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
+    """
     if args.num_save_attention > 0:
         # NOTE: sort it by output lengths
         data = sorted(list(valid_json.items())[:args.num_save_attention],
@@ -269,7 +270,8 @@ def train(args):
         trainer.extend(att_reporter, trigger=(1, 'epoch'))
     else:
         att_reporter = None
-
+    """
+    att_reporter = None
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss'],
                                          'epoch', file_name='loss.png'))
@@ -370,7 +372,7 @@ def trans(args):
     """
     set_deterministic_pytorch(args)
     model, train_args = load_trained_model(args.model)
-    assert isinstance(model, MTInterface)
+    #assert isinstance(model, MTInterface)
     model.trans_args = args
 
     # read rnnlm

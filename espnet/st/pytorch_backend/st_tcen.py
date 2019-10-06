@@ -112,7 +112,7 @@ class CustomUpdater(StandardUpdater):
         # Get the next batch ( a list of json files)
         batch = train_iter.next()
         batch = list(batch)
-        batch = [arr.to(self.device) for arr in batch]
+        batch = [arr.to(self.device) if arr is not None else None for arr in batch]
         batch.append(task)
         x = tuple(batch)
 
@@ -277,7 +277,8 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter for ASR data and ST data
-    converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    st_converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
+    asr_converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     # Setup a converter for MT data
     mt_converter = MTCustomConverter()
 
@@ -334,11 +335,11 @@ def train(args):
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
     train_iter = {'main': ChainerDataLoader(
-        dataset=TransformDataset(st_train, lambda data: converter([load_tr(data)])),
+        dataset=TransformDataset(st_train, lambda data: st_converter([load_tr(data)])),
         batch_size=1, num_workers=args.n_iter_processes,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0]),
         'asr': ChainerDataLoader(
-        dataset=TransformDataset(asr_train, lambda data: converter([load_tr(data)])),
+        dataset=TransformDataset(asr_train, lambda data: asr_converter([load_tr(data)])),
         batch_size=1, num_workers=args.n_iter_processes,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0]),
         'mt': ChainerDataLoader(
@@ -370,21 +371,7 @@ def train(args):
     trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
-    if args.num_save_attention > 0:
-        data = sorted(list(valid_json.items())[:args.num_save_attention],
-                      key=lambda x: int(x[1]['input'][0]['shape'][1]), reverse=True)
-        if hasattr(model, "module"):
-            att_vis_fn = model.module.calculate_all_attentions
-            plot_class = model.module.attention_plot_class
-        else:
-            att_vis_fn = model.calculate_all_attentions
-            plot_class = model.attention_plot_class
-        att_reporter = plot_class(
-            att_vis_fn, data, args.outdir + "/att_ws",
-            converter=converter, transform=load_cv, device=device)
-        trainer.extend(att_reporter, trigger=(1, 'epoch'))
-    else:
-        att_reporter = None
+    att_reporter = None
 
     # Make a plot for training and validation values
     trainer.extend(extensions.PlotReport(['main/loss_st', 'validation/main/loss_st',

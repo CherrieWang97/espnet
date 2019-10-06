@@ -212,11 +212,12 @@ class CustomConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32):
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, pad_asr=False):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
+        self.pad_asr = pad_asr
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -260,8 +261,13 @@ class CustomConverter(object):
         # NOTE: this is for multi-task learning (e.g., speech translation)
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
                                for y in ys], self.ignore_id).to(device)
-
-        return xs_pad, ilens, ys_pad
+        if self.pad_asr:
+            ys_pad_asr = pad_list([torch.from_numpy(np.array(y[1])).long()
+                                  for y in ys], 0).to(device)
+            ylens = torch.from_numpy(np.array([len(y[1]) for y in ys])).to(device)
+            return xs_pad, ilens, ys_pad, ys_pad_asr, ylens
+        
+        return xs_pad, ilens, ys_pad, None, None
 
 
 def train(args):
