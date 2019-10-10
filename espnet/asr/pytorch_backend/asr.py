@@ -110,7 +110,7 @@ class CustomEvaluator(BaseEvaluator):
         self.model.eval()
         with torch.no_grad():
             for batch in it:
-                x = tuple(arr.to(self.device) for arr in batch)
+                x = tuple(arr.to(self.device) if arr is not None else None for arr in batch)
                 observation = {}
                 with reporter_module.report_scope(observation):
                     # read scp files
@@ -164,7 +164,7 @@ class CustomUpdater(StandardUpdater):
         batch = train_iter.next()
         self.iteration += 1
 
-        x = tuple(arr.to(self.device) for arr in batch)
+        x = tuple(arr.to(self.device) if arr is not None else None for arr in batch)
 
         # Compute the loss at this time step and accumulate it
         loss = self.model(*x).mean() / self.accum_grad
