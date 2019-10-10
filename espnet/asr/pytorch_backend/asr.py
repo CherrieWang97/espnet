@@ -267,7 +267,7 @@ class CustomConverter(object):
             ylens = torch.from_numpy(np.array([len(y[1]) for y in ys])).to(device)
             return xs_pad, ilens, ys_pad, ys_pad_asr, ylens
         
-        return xs_pad, ilens, ys_pad, None, None
+        return xs_pad, ilens, ys_pad
 
 
 def train(args):
