@@ -149,7 +149,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad_trg, ys_pad_src, ys_lens, task="tlm"):
+    def forward(self, xs_pad, ilens, ys_pad_trg, ys_pad_src, ys_lens, task="cmlm"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -164,14 +164,22 @@ class E2E(ASRInterface, torch.nn.Module):
         """
         if task == "mlm" or task == "cmlm":
             ys_pad_src = ys_pad_src[:, :max(ys_lens)]
-            lang_ids = torch.ones_like(ys_pad_src).long().to(ys_pad_src.device)
+            ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
+            lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
+            lang_mask = ys_pad_src == 2
             src_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
+            lang_ids = lang_ids.masked_fill(lang_mask, 1).long()
+            ys_pad_trg = ys_pad_trg.masked_fill(~lang_mask, -1)
             ys_embeded = self.word_embed(ys_pad_src)
             lang_embeded = self.lang_embed(lang_ids)
             ys_embeded += lang_embeded
             ys_embeded = self.position_embed(ys_embeded)
             hs_pad, hs_mask = self.encoder(ys_embeded, src_mask)
             hs_pad = self.after_norm(hs_pad)
+            pred_pad = self.output(hs_pad)
+            loss = self.criterion(pred_pad, ys_pad_trg)
+            acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
+                              ignore_label=self.ignore_id)
 
         if task == "tlm":
             xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
