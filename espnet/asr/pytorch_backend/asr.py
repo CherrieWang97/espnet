@@ -21,6 +21,7 @@ from chainer.training.updater import StandardUpdater
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch
+from torch.nn.parallel import data_parallel
 
 from espnet.asr.asr_utils import adadelta_eps_decay
 from espnet.asr.asr_utils import add_results_to_json
@@ -167,7 +168,11 @@ class CustomUpdater(StandardUpdater):
         x = tuple(arr.to(self.device) for arr in batch)
 
         # Compute the loss at this time step and accumulate it
-        loss = self.model(*x).mean() / self.accum_grad
+        if self.ngpu == 0:
+            loss = self.model(*x).mean() / self.accum_grad
+        else:
+            # apex does not support torch.nn.DataParallel
+            loss = data_parallel(self.model, x, range(self.ngpu)).mean() / self.accum_grad
         if self.use_apex:
             from apex import amp
             # NOTE: for a compatibility with noam optimizer
