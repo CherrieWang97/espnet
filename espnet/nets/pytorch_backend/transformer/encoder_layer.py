@@ -7,10 +7,12 @@
 """Encoder self-attention layer definition."""
 
 import torch
+import pdb
 
 from torch import nn
 
 from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
+from espnet.nets.pytorch_backend.transformer.gelu_feed_forward import gelu
 
 
 class EncoderLayer(nn.Module):
@@ -69,3 +71,19 @@ class EncoderLayer(nn.Module):
             x = self.norm2(x)
 
         return x, mask
+
+class LMPredictionHead(nn.Module):
+    def __init__(self, size, odim):
+        super(LMPredictionHead, self).__init__()
+        self.dense = nn.Linear(size, size)
+        self.act_fn = gelu
+        self.norm = LayerNorm(size)
+        self.decoder = nn.Linear(size, odim, bias=False)
+        self.bias = nn.Parameter(torch.zeros(odim))
+
+    def forward(self, x):
+        x = self.dense(x)
+        x = self.act_fn(x)
+        x = self.norm(x)
+        x = self.decoder(x) + self.bias
+        return x

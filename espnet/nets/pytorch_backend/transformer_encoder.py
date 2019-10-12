@@ -24,9 +24,10 @@ from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttenti
 from espnet.nets.pytorch_backend.transformer.decoder import Decoder
 from espnet.nets.pytorch_backend.transformer.embedding import PositionalEncoding
 from espnet.nets.pytorch_backend.transformer.encoder_layer import EncoderLayer
+from espnet.nets.pytorch_backend.transformer.encoder_layer import LMPredictionHead
 from espnet.nets.pytorch_backend.transformer.layer_norm import LayerNorm
 from espnet.nets.pytorch_backend.transformer.multi_layer_conv import MultiLayeredConv1d
-from espnet.nets.pytorch_backend.transformer.positionwise_feed_forward import PositionwiseFeedForward
+from espnet.nets.pytorch_backend.transformer.gelu_feed_forward import GeluFeedForward
 from espnet.nets.pytorch_backend.transformer.repeat import repeat
 from espnet.nets.pytorch_backend.transformer.subsampling import Conv2dSubsampling
 from espnet.nets.pytorch_backend.transformer.initializer import initialize
@@ -105,22 +106,24 @@ class E2E(ASRInterface, torch.nn.Module):
             args.transformer_attn_dropout_rate = args.dropout_rate
         self.speech_embed = Conv2dSubsampling(idim, args.adim, args.dropout_rate)
         self.word_embed = torch.nn.Embedding(odim, args.adim, padding_idx=0)
-        self.position_embed = PositionalEncoding(args.adim, args.dropout_rate)
+        self.position_embed = torch.nn.Embedding(512, args.adim)
         self.lang_embed = torch.nn.Embedding(2, args.adim)
-        positionwise_layer = PositionwiseFeedForward(args.adim, args.eunits, args.dropout_rate)
+        positionwise_args = (args.adim, args.eunits, args.dropout_rate)
+        positionwise_layer = GeluFeedForward
         self.encoder = repeat(
             args.elayers,
             lambda: EncoderLayer(
                 args.adim,
                 MultiHeadedAttention(args.aheads, args.adim, args.dropout_rate),
-                positionwise_layer,
+                feed_forward=positionwise_layer(*positionwise_args),
                 dropout_rate=args.dropout_rate,
-                normalize_before=True,
+                normalize_before=False,
                 concat_after=False
              )
         )
-        self.after_norm = LayerNorm(args.adim)
-        self.output = torch.nn.Linear(args.adim, odim)
+        self.embed_norm = LayerNorm(args.adim)
+        self.dropout = torch.nn.Dropout(args.dropout_rate)
+        self.predict = LMPredictionHead(args.adim, odim)
         self.sos = odim - 1
         self.eos = odim - 1
         self.odim = odim
@@ -129,11 +132,10 @@ class E2E(ASRInterface, torch.nn.Module):
         self.reporter = Reporter()
         self.acc = torch.zeros(1)
 
-        # self.lsm_weight = a
-        self.criterion = LabelSmoothingLoss(self.odim, self.ignore_id, args.lsm_weight,
-                                            args.transformer_length_normalized_loss)
+        self.criterion = torch.nn.CrossEntropyLoss(ignore_index=-1)
         # self.verbose = args.verbose
         self.reset_parameters(args)
+        self.tie_weights()
         self.adim = args.adim
         self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type='warpctc', reduce=True)
         args.report_cer = False
@@ -149,7 +151,42 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad_trg, ys_pad_src, ys_lens, task="cmlm"):
+    def tie_weights(self):
+        self.predict.decoder.weight = self.word_embed.weight
+
+    def load_weight_from_bert(self, path):
+        bert_state = torch.load(path)
+        self.word_embed.weight.data = bert_state['bert.embeddings.word_embeddings.weight'].data
+        self.position_embed.weight.data = bert_state['bert.embeddings.position_embeddings.weight'].data
+        self.lang_embed.weight.data = bert_state['bert.embeddings.token_type_embeddings.weight'].data
+        self.embed_norm.weight.data = bert_state['bert.embeddings.LayerNorm.weight'].data
+        self.embed_norm.bias.data = bert_state['bert.embeddings.LayerNorm.bias'].data
+        for i in range(len(self.encoder)):
+            self.encoder[i].self_attn.linear_q.weight.data = bert_state['bert.encoder.layer.{}.attention.self.query.weight'.format(i)].data
+            self.encoder[i].self_attn.linear_q.bias.data = bert_state['bert.encoder.layer.{}.attention.self.query.bias'.format(i)].data
+            self.encoder[i].self_attn.linear_k.weight.data = bert_state['bert.encoder.layer.{}.attention.self.key.weight'.format(i)].data
+            self.encoder[i].self_attn.linear_k.bias.data = bert_state['bert.encoder.layer.{}.attention.self.key.bias'.format(i)].data
+            self.encoder[i].self_attn.linear_v.weight.data = bert_state['bert.encoder.layer.{}.attention.self.value.weight'.format(i)].data
+            self.encoder[i].self_attn.linear_v.bias.data = bert_state['bert.encoder.layer.{}.attention.self.value.bias'.format(i)].data
+            self.encoder[i].self_attn.linear_out.weight.data = bert_state['bert.encoder.layer.{}.attention.output.dense.weight'.format(i)].data
+            self.encoder[i].self_attn.linear_out.bias.data = bert_state['bert.encoder.layer.{}.attention.output.dense.bias'.format(i)].data
+            self.encoder[i].feed_forward.w_1.weight.data = bert_state['bert.encoder.layer.{}.intermediate.dense.weight'.format(i)].data
+            self.encoder[i].feed_forward.w_1.bias.data = bert_state['bert.encoder.layer.{}.intermediate.dense.bias'.format(i)].data
+            self.encoder[i].feed_forward.w_2.weight.data = bert_state['bert.encoder.layer.{}.output.dense.weight'.format(i)].data
+            self.encoder[i].feed_forward.w_2.bias.data = bert_state['bert.encoder.layer.{}.output.dense.bias'.format(i)].data
+            self.encoder[i].norm1.weight.data = bert_state['bert.encoder.layer.{}.attention.output.LayerNorm.weight'.format(i)].data
+            self.encoder[i].norm1.bias.data = bert_state['bert.encoder.layer.{}.attention.output.LayerNorm.bias'.format(i)].data
+            self.encoder[i].norm2.weight.data = bert_state['bert.encoder.layer.{}.output.LayerNorm.weight'.format(i)].data
+            self.encoder[i].norm2.bias.data = bert_state['bert.encoder.layer.{}.output.LayerNorm.bias'.format(i)].data
+        self.predict.dense.weight.data = bert_state['cls.predictions.transform.dense.weight'].data
+        self.predict.dense.bias.data = bert_state['cls.predictions.transform.dense.bias'].data
+        self.predict.norm.weight.data = bert_state['cls.predictions.transform.LayerNorm.weight'].data
+        self.predict.norm.bias.data = bert_state['cls.predictions.transform.LayerNorm.bias'].data
+        self.predict.decoder.weight.data = bert_state['cls.predictions.decoder.weight'].data
+        self.predict.bias.data = bert_state['cls.predictions.bias'].data
+            
+
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, task="cmlm"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -162,22 +199,28 @@ class E2E(ASRInterface, torch.nn.Module):
         :return: accuracy in attention decoder
         :rtype: float
         """
+        #pdb.set_trace()
         if task == "mlm" or task == "cmlm":
             ys_pad_src = ys_pad_src[:, :max(ys_lens)]
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
             lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
-            lang_mask = ys_pad_src == 2
+            #lang_mask = ys_pad_src == 2
             src_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
-            lang_ids = lang_ids.masked_fill(lang_mask, 1).long()
-            ys_pad_trg = ys_pad_trg.masked_fill(~lang_mask, -1)
+            #lang_ids = lang_ids.masked_fill(lang_mask, 1).long()
+            #ys_pad_trg = ys_pad_trg.masked_fill(~lang_mask, -1)
             ys_embeded = self.word_embed(ys_pad_src)
+            seq_length = ys_pad_src.size(1)
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=ys_pad_src.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(ys_pad_src)
+            position_embeded = self.position_embed(position_ids)
+            lang_ids = torch.zeros_like(ys_pad_src)
             lang_embeded = self.lang_embed(lang_ids)
-            ys_embeded += lang_embeded
-            ys_embeded = self.position_embed(ys_embeded)
-            hs_pad, hs_mask = self.encoder(ys_embeded, src_mask)
-            hs_pad = self.after_norm(hs_pad)
-            pred_pad = self.output(hs_pad)
-            loss = self.criterion(pred_pad, ys_pad_trg)
+            embeddings = ys_embeded + position_embeded + lang_embeded
+            embeddings = self.dropout(self.embed_norm(embeddings))
+          
+            hs_pad, hs_mask = self.encoder(embeddings, src_mask)
+            pred_pad = self.predict(hs_pad)
+            loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
 

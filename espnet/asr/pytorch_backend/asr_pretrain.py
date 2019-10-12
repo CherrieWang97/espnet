@@ -140,7 +140,7 @@ class CustomUpdater(StandardUpdater):
     """
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
+                 optimizer, scheduler, device, ngpu, accum_grad=1, use_apex=False):
         super(CustomUpdater, self).__init__(train_iter, optimizer)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
@@ -148,9 +148,9 @@ class CustomUpdater(StandardUpdater):
         self.ngpu = ngpu
         self.accum_grad = accum_grad
         self.forward_count = 0
-        self.grad_noise = grad_noise
         self.iteration = 0
         self.use_apex = use_apex
+        self.scheduler = scheduler
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
@@ -176,11 +176,6 @@ class CustomUpdater(StandardUpdater):
                 scaled_loss.backward()
         else:
             loss.backward()
-        # gradient noise injection
-        if self.grad_noise:
-            from espnet.asr.asr_utils import add_gradient_noise
-            add_gradient_noise(self.model, self.iteration, duration=100, eta=1.0, scale_factor=0.55)
-        loss.detach()  # Truncate the graph
 
         # update parameters
         self.forward_count += 1
@@ -195,6 +190,8 @@ class CustomUpdater(StandardUpdater):
             logging.warning('grad norm is nan. Do not update model.')
         else:
             optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
         optimizer.zero_grad()
 
     def update(self):
@@ -212,12 +209,30 @@ class CustomConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, pad_asr=False):
+    def __init__(self, odim, subsampling_factor=1, dtype=torch.float32, pad_asr=False):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
         self.pad_asr = pad_asr
+        self.odim = odim
+
+    def mask_tokens(self, inputs):
+        labels = inputs.clone()
+        probability_matrix = torch.full(labels.shape, 0.15)
+        special_mask = (labels == 101) + (labels == 102) + (labels == 0)
+        probability_matrix.masked_fill_(special_mask, value=0.0)
+        masked_indices = torch.bernoulli(probability_matrix).byte()
+        labels[~masked_indices] = -1
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).byte() & masked_indices
+        inputs[indices_replaced] = 103
+        
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).byte() & masked_indices & ~indices_replaced
+        random_words = torch.randint(self.odim, labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        return inputs, labels
+    
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -260,14 +275,11 @@ class CustomConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         # NOTE: this is for multi-task learning (e.g., speech translation)
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
-                               for y in ys], self.ignore_id).to(device)
-        if self.pad_asr:
-            ys_pad_asr = pad_list([torch.from_numpy(np.array(y[1])).long()
-                                  for y in ys], 0).to(device)
-            ylens = torch.from_numpy(np.array([len(y[1]) for y in ys])).to(device)
-            return xs_pad, ilens, ys_pad, ys_pad_asr, ylens
+                               for y in ys], 0).to(device)
+        inputs, labels = self.mask_tokens(ys_pad)
+        ylens = torch.from_numpy(np.array([len(y[0]) for y in ys])).to(device)
+        return xs_pad, ilens, inputs, ylens, labels
         
-        return xs_pad, ilens, ys_pad
 
 
 def train(args):
@@ -303,12 +315,15 @@ def train(args):
         mtl_mode = 'mtl'
         logging.info('Multitask learning mode')
 
+    #torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
     if args.enc_init is not None or args.dec_init is not None:
         model = load_trained_modules(idim, odim, args)
     else:
         model_class = dynamic_import(args.model_module)
-        model = model_class(idim, odim, args)
+        model = model_class(idim, 30522, args)
     assert isinstance(model, ASRInterface)
+    model.load_weight_from_bert('bert.model')
 
     subsampling_factor = model.subsample[0]
 
@@ -350,16 +365,30 @@ def train(args):
     model = model.to(device=device, dtype=dtype)
 
     # Setup an optimizer
+    
     if args.opt == 'adadelta':
         optimizer = torch.optim.Adadelta(
             model.parameters(), rho=0.95, eps=args.eps,
             weight_decay=args.weight_decay)
+        scheduler = None
     elif args.opt == 'adam':
         optimizer = torch.optim.Adam(model.parameters(),
                                      weight_decay=args.weight_decay)
+        scheduler = None
     elif args.opt == 'noam':
         from espnet.nets.pytorch_backend.transformer.optimizer import get_std_opt
         optimizer = get_std_opt(model, args.adim, args.transformer_warmup_steps, args.transformer_lr)
+        scheduler = None
+    elif args.opt == 'adamW':
+        from espnet.nets.pytorch_backend.transformer.optimizer import AdamW
+        no_decay = ['bias', 'norm1.weight', 'norm2.weight', 'embed_norm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.transformer_lr, eps=1e-8)
+        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=10000)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
 
@@ -384,7 +413,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
+    converter = CustomConverter(odim, subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
 
     # read json data
     """
@@ -442,8 +471,8 @@ def train(args):
     """
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer,
-        device, args.ngpu, args.grad_noise, args.accum_grad, use_apex=use_apex)
+        model, args.grad_clip, train_iter, optimizer, scheduler,
+        device, args.ngpu, args.accum_grad, use_apex=use_apex)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
