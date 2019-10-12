@@ -21,7 +21,6 @@ from chainer.training.updater import StandardUpdater
 import numpy as np
 from tensorboardX import SummaryWriter
 import torch
-from torch.nn.parallel import data_parallel
 
 from espnet.asr.asr_utils import adadelta_eps_decay
 from espnet.asr.asr_utils import add_results_to_json
@@ -141,7 +140,7 @@ class CustomUpdater(StandardUpdater):
     """
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
+                 optimizer, scheduler, device, ngpu, accum_grad=1, use_apex=False):
         super(CustomUpdater, self).__init__(train_iter, optimizer)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
@@ -149,9 +148,9 @@ class CustomUpdater(StandardUpdater):
         self.ngpu = ngpu
         self.accum_grad = accum_grad
         self.forward_count = 0
-        self.grad_noise = grad_noise
         self.iteration = 0
         self.use_apex = use_apex
+        self.scheduler = scheduler
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
@@ -168,11 +167,7 @@ class CustomUpdater(StandardUpdater):
         x = tuple(arr.to(self.device) if arr is not None else None for arr in batch)
 
         # Compute the loss at this time step and accumulate it
-        if self.ngpu == 0:
-            loss = self.model(*x).mean() / self.accum_grad
-        else:
-            # apex does not support torch.nn.DataParallel
-            loss = data_parallel(self.model, x, range(self.ngpu)).mean() / self.accum_grad
+        loss = self.model(*x).mean() / self.accum_grad
         if self.use_apex:
             from apex import amp
             # NOTE: for a compatibility with noam optimizer
@@ -181,11 +176,6 @@ class CustomUpdater(StandardUpdater):
                 scaled_loss.backward()
         else:
             loss.backward()
-        # gradient noise injection
-        if self.grad_noise:
-            from espnet.asr.asr_utils import add_gradient_noise
-            add_gradient_noise(self.model, self.iteration, duration=100, eta=1.0, scale_factor=0.55)
-        loss.detach()  # Truncate the graph
 
         # update parameters
         self.forward_count += 1
@@ -200,6 +190,8 @@ class CustomUpdater(StandardUpdater):
             logging.warning('grad norm is nan. Do not update model.')
         else:
             optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
         optimizer.zero_grad()
 
     def update(self):
@@ -217,12 +209,30 @@ class CustomConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, pad_asr=False):
+    def __init__(self, odim, subsampling_factor=1, dtype=torch.float32, pad_asr=False):
         """Construct a CustomConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
         self.pad_asr = pad_asr
+        self.odim = odim
+
+    def mask_tokens(self, inputs):
+        labels = inputs.clone()
+        probability_matrix = torch.full(labels.shape, 0.15)
+        special_mask = (labels == 101) + (labels == 102) + (labels == 0)
+        probability_matrix.masked_fill_(special_mask, value=0.0)
+        masked_indices = torch.bernoulli(probability_matrix).byte()
+        labels[~masked_indices] = -1
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).byte() & masked_indices
+        inputs[indices_replaced] = 103
+        
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).byte() & masked_indices & ~indices_replaced
+        random_words = torch.randint(self.odim, labels.shape, dtype=torch.long)
+        inputs[indices_random] = random_words[indices_random]
+
+        return inputs, labels
+    
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -265,14 +275,11 @@ class CustomConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         # NOTE: this is for multi-task learning (e.g., speech translation)
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
-                               for y in ys], self.ignore_id).to(device)
-        if self.pad_asr:
-            ys_pad_asr = pad_list([torch.from_numpy(np.array(y[1])).long()
-                                  for y in ys], 0).to(device)
-            ylens = torch.from_numpy(np.array([len(y[1]) for y in ys])).to(device)
-            return xs_pad, ilens, ys_pad, ys_pad_asr, ylens
+                               for y in ys], 0).to(device)
+        inputs, labels = self.mask_tokens(ys_pad)
+        ylens = torch.from_numpy(np.array([len(y[0]) for y in ys])).to(device)
+        return xs_pad, ilens, inputs, ylens, labels
         
-        return xs_pad, ilens, ys_pad
 
 
 def train(args):
@@ -289,11 +296,11 @@ def train(args):
         logging.warning('cuda is not available')
 
     # get input and output dimension info
-    with open(args.valid_json, 'rb') as f:
-        valid_json = json.load(f)['utts']
-    utts = list(valid_json.keys())
-    idim = int(valid_json[utts[0]]['input'][0]['shape'][-1])
-    odim = int(valid_json[utts[0]]['output'][0]['shape'][-1])
+    with open(args.train_json, 'rb') as f:
+        train_json = json.load(f)['utts']
+    utts = list(train_json.keys())
+    idim = int(train_json[utts[0]]['input'][0]['shape'][-1])
+    odim = int(train_json[utts[0]]['output'][0]['shape'][-1])
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
 
@@ -308,12 +315,15 @@ def train(args):
         mtl_mode = 'mtl'
         logging.info('Multitask learning mode')
 
+    #torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
     if args.enc_init is not None or args.dec_init is not None:
         model = load_trained_modules(idim, odim, args)
     else:
         model_class = dynamic_import(args.model_module)
-        model = model_class(idim, odim, args)
+        model = model_class(idim, 30522, args)
     assert isinstance(model, ASRInterface)
+    model.load_weight_from_bert('bert.model')
 
     subsampling_factor = model.subsample[0]
 
@@ -355,16 +365,30 @@ def train(args):
     model = model.to(device=device, dtype=dtype)
 
     # Setup an optimizer
+    
     if args.opt == 'adadelta':
         optimizer = torch.optim.Adadelta(
             model.parameters(), rho=0.95, eps=args.eps,
             weight_decay=args.weight_decay)
+        scheduler = None
     elif args.opt == 'adam':
         optimizer = torch.optim.Adam(model.parameters(),
                                      weight_decay=args.weight_decay)
+        scheduler = None
     elif args.opt == 'noam':
         from espnet.nets.pytorch_backend.transformer.optimizer import get_std_opt
         optimizer = get_std_opt(model, args.adim, args.transformer_warmup_steps, args.transformer_lr)
+        scheduler = None
+    elif args.opt == 'adamW':
+        from espnet.nets.pytorch_backend.transformer.optimizer import AdamW
+        no_decay = ['bias', 'norm1.weight', 'norm2.weight', 'embed_norm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.transformer_lr, eps=1e-8)
+        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=10000)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
 
@@ -389,14 +413,15 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = CustomConverter(odim, subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
 
     # read json data
+    """
     with open(args.train_json, 'rb') as f:
         train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
-
+    """
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     train = make_batchset(train_json, args.batch_size,
@@ -408,6 +433,7 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    """
     valid = make_batchset(valid_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -416,15 +442,18 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    """
     logging.warning('train data size: {}'.format(len(train)))
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
     )
+    """
     load_cv = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
+    """
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
     # default collate function converts numpy array to pytorch tensor
@@ -434,15 +463,16 @@ def train(args):
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
         batch_size=1, num_workers=args.n_iter_processes,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
+    """
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
         batch_size=1, shuffle=False, collate_fn=lambda x: x[0],
         num_workers=args.n_iter_processes)}
-
+    """
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer,
-        device, args.ngpu, args.grad_noise, args.accum_grad, use_apex=use_apex)
+        model, args.grad_clip, train_iter, optimizer, scheduler,
+        device, args.ngpu, args.accum_grad, use_apex=use_apex)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -456,7 +486,7 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
+    #trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
     """
@@ -478,9 +508,7 @@ def train(args):
     """
     att_reporter = None
     # Make a plot for training and validation values
-    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
-                                          'main/loss_ctc', 'validation/main/loss_ctc',
-                                          'main/loss_att', 'validation/main/loss_att'],
+    trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss'],
                                          'epoch', file_name='loss.png'))
     trainer.extend(extensions.PlotReport(['main/acc', 'validation/main/acc'],
                                          'epoch', file_name='acc.png'))
@@ -488,6 +516,7 @@ def train(args):
                                          'epoch', file_name='cer.png'))
 
     # Save best models
+    """
     trainer.extend(snapshot_object(model, 'model.loss.best'),
                    trigger=training.triggers.MinValueTrigger('validation/main/loss'))
     if mtl_mode != 'ctc':
@@ -517,18 +546,17 @@ def train(args):
                            trigger=CompareValueTrigger(
                                'validation/main/loss',
                                lambda best_value, current_value: best_value < current_value))
-
+    """
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'main/loss', 'main/loss_ctc', 'main/loss_att',
-                   'validation/main/loss', 'validation/main/loss_ctc', 'validation/main/loss_att',
-                   'main/acc', 'validation/main/acc', 'main/cer_ctc', 'validation/main/cer_ctc',
+    report_keys = ['epoch', 'iteration', 'main/loss',
+                   'validation/main/loss', 
+                   'main/acc', 'validation/main/acc',
                    'elapsed_time']
-    if args.opt == 'adadelta':
-        trainer.extend(extensions.observe_value(
-            'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
+    trainer.extend(extensions.observe_value(
+            'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
             trigger=(args.report_interval_iters, 'iteration'))
-        report_keys.append('eps')
+    report_keys.append('lr')
     if args.report_cer:
         report_keys.append('validation/main/cer')
     if args.report_wer:

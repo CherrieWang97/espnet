@@ -134,7 +134,7 @@ def get_parser(parser=None, required=True):
                         help='The configuration file for the pre-processing')
     # optimization related
     parser.add_argument('--opt', default='adadelta', type=str,
-                        choices=['adadelta', 'adam', 'noam'],
+                        choices=['adadelta', 'adam', 'noam', 'adamW'],
                         help='Optimizer')
     parser.add_argument('--accum-grad', default=1, type=int,
                         help='Number of gradient accumuration')
@@ -345,7 +345,7 @@ def main(cmd_args):
             from espnet.asr.chainer_backend.asr import train
             train(args)
         elif args.backend == "pytorch":
-            from espnet.asr.pytorch_backend.asr import train
+            from espnet.asr.pytorch_backend.asr_pretrain import train
             train(args)
         else:
             raise ValueError("Only chainer and pytorch are supported.")
