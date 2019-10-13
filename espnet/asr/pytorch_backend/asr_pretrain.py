@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import sys
+import time
 import pdb
 
 from chainer import reporter as reporter_module
@@ -442,7 +443,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=args.n_iter_processes,
+        batch_size=1, num_workers=4,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
