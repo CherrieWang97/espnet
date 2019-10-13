@@ -259,6 +259,7 @@ class CustomConverter(object):
 
         # perform padding and convert to tensor
         # currently only support real number
+        """
         if xs[0].dtype.kind == 'c':
             xs_pad_real = pad_list(
                 [torch.from_numpy(x.real).float() for x in xs], 0).to(device, dtype=self.dtype)
@@ -271,14 +272,13 @@ class CustomConverter(object):
             xs_pad = {'real': xs_pad_real, 'imag': xs_pad_imag}
         else:
             xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-
-        ilens = torch.from_numpy(ilens).to(device)
+        """
         # NOTE: this is for multi-task learning (e.g., speech translation)
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
                                for y in ys], 0).to(device)
         inputs, labels = self.mask_tokens(ys_pad)
-        ylens = torch.from_numpy(np.array([len(y[0]) for y in ys])).to(device)
-        return xs_pad, ilens, inputs, ylens, labels
+        ylens = torch.from_numpy(np.array([len(y) for y in ys])).to(device)
+        return None, None, inputs, ylens, labels
         
 
 
@@ -323,7 +323,7 @@ def train(args):
         model_class = dynamic_import(args.model_module)
         model = model_class(idim, 30522, args)
     assert isinstance(model, ASRInterface)
-    model.load_weight_from_bert('bert.model')
+    #model.load_weight_from_bert('bert.model')
 
     subsampling_factor = model.subsample[0]
 
@@ -387,26 +387,11 @@ def train(args):
             {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
         optimizer = AdamW(optimizer_grouped_parameters, lr=args.transformer_lr, eps=1e-8)
-        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
-        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=10000)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
 
     # setup apex.amp
-    if args.train_dtype in ("O0", "O1", "O2", "O3"):
-        try:
-            from apex import amp
-        except ImportError as e:
-            logging.error(f"You need to install apex for --train-dtype {args.train_dtype}. "
-                          "See https://github.com/NVIDIA/apex#linux")
-            raise e
-        if args.opt == 'noam':
-            model, optimizer.optimizer = amp.initialize(model, optimizer.optimizer, opt_level=args.train_dtype)
-        else:
-            model, optimizer = amp.initialize(model, optimizer, opt_level=args.train_dtype)
-        use_apex = True
-    else:
-        use_apex = False
+    use_apex = False
 
     # FIXME: TOO DIRTY HACK
     setattr(optimizer, "target", reporter)
@@ -416,12 +401,8 @@ def train(args):
     converter = CustomConverter(odim, subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
 
     # read json data
-    """
-    with open(args.train_json, 'rb') as f:
-        train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
-    """
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     train = make_batchset(train_json, args.batch_size,
@@ -433,7 +414,6 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
-    """
     valid = make_batchset(valid_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -442,18 +422,19 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
-    """
     logging.warning('train data size: {}'.format(len(train)))
+    if args.opt == 'adamW':
+        steps = args.epochs * len(train)
+        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=steps)
     load_tr = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
+        mode='mt', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
     )
-    """
     load_cv = LoadInputsAndTargets(
-        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
+        mode='mt', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
-    """
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
     # default collate function converts numpy array to pytorch tensor
@@ -463,12 +444,10 @@ def train(args):
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
         batch_size=1, num_workers=args.n_iter_processes,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
-    """
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
         batch_size=1, shuffle=False, collate_fn=lambda x: x[0],
         num_workers=args.n_iter_processes)}
-    """
     # Set up a trainer
     updater = CustomUpdater(
         model, args.grad_clip, train_iter, optimizer, scheduler,
@@ -480,6 +459,7 @@ def train(args):
         trainer.extend(ShufflingEnabler([train_iter]),
                        trigger=(args.sortagrad if args.sortagrad != -1 else args.epochs, 'epoch'))
 
+    trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
     # Resume from a snapshot
     if args.resume:
         logging.info('resumed from %s' % args.resume)
@@ -516,37 +496,13 @@ def train(args):
                                          'epoch', file_name='cer.png'))
 
     # Save best models
-    """
+    trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
     trainer.extend(snapshot_object(model, 'model.loss.best'),
                    trigger=training.triggers.MinValueTrigger('validation/main/loss'))
     if mtl_mode != 'ctc':
         trainer.extend(snapshot_object(model, 'model.acc.best'),
                        trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
-    # save snapshot which contains model and optimizer states
-    trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
-
-    # epsilon decay in the optimizer
-    if args.opt == 'adadelta':
-        if args.criterion == 'acc' and mtl_mode != 'ctc':
-            trainer.extend(restore_snapshot(model, args.outdir + '/model.acc.best', load_fn=torch_load),
-                           trigger=CompareValueTrigger(
-                               'validation/main/acc',
-                               lambda best_value, current_value: best_value > current_value))
-            trainer.extend(adadelta_eps_decay(args.eps_decay),
-                           trigger=CompareValueTrigger(
-                               'validation/main/acc',
-                               lambda best_value, current_value: best_value > current_value))
-        elif args.criterion == 'loss':
-            trainer.extend(restore_snapshot(model, args.outdir + '/model.loss.best', load_fn=torch_load),
-                           trigger=CompareValueTrigger(
-                               'validation/main/loss',
-                               lambda best_value, current_value: best_value < current_value))
-            trainer.extend(adadelta_eps_decay(args.eps_decay),
-                           trigger=CompareValueTrigger(
-                               'validation/main/loss',
-                               lambda best_value, current_value: best_value < current_value))
-    """
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/loss',
