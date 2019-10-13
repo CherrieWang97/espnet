@@ -260,7 +260,6 @@ class CustomConverter(object):
 
         # perform padding and convert to tensor
         # currently only support real number
-        """
         if xs[0].dtype.kind == 'c':
             xs_pad_real = pad_list(
                 [torch.from_numpy(x.real).float() for x in xs], 0).to(device, dtype=self.dtype)
@@ -273,13 +272,13 @@ class CustomConverter(object):
             xs_pad = {'real': xs_pad_real, 'imag': xs_pad_imag}
         else:
             xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-        """
         # NOTE: this is for multi-task learning (e.g., speech translation)
+        ilens = torch.from_numpy(ilens).to(device)
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
                                for y in ys], 0).to(device)
         inputs, labels = self.mask_tokens(ys_pad)
         ylens = torch.from_numpy(np.array([len(y) for y in ys])).to(device)
-        return None, None, inputs, ylens, labels
+        return xs_pad, ilens, inputs, ylens, labels
         
 
 
@@ -324,7 +323,7 @@ def train(args):
         model_class = dynamic_import(args.model_module)
         model = model_class(idim, 30522, args)
     assert isinstance(model, ASRInterface)
-    #model.load_weight_from_bert('bert.model')
+    model.load_weight_from_bert('exp/bert.model')
 
     subsampling_factor = model.subsample[0]
 
@@ -429,11 +428,11 @@ def train(args):
         from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
         scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=steps)
     load_tr = LoadInputsAndTargets(
-        mode='mt', load_output=True, preprocess_conf=args.preprocess_conf,
+        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
     )
     load_cv = LoadInputsAndTargets(
-        mode='mt', load_output=True, preprocess_conf=args.preprocess_conf,
+        mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
     # hack to make batchsize argument as 1
@@ -443,7 +442,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=4,
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
