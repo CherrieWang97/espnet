@@ -186,7 +186,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.predict.bias.data = bert_state['cls.predictions.bias'].data
             
 
-    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, task="cmlm"):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, task="tlm"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -199,7 +199,6 @@ class E2E(ASRInterface, torch.nn.Module):
         :return: accuracy in attention decoder
         :rtype: float
         """
-        #pdb.set_trace()
         if task == "mlm" or task == "cmlm":
             ys_pad_src = ys_pad_src[:, :max(ys_lens)]
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
@@ -228,25 +227,27 @@ class E2E(ASRInterface, torch.nn.Module):
             xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
             src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
             speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
-            lang_ids = torch.zeros((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
-            speech_embed = speech_pad + self.lang_embed(lang_ids)
-            speech_embed = self.position_embed(speech_embed)
+            lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
+            speech_embeddings = speech_pad + self.lang_embed(lang_ids)
             ys_pad_src = ys_pad_src[:, :max(ys_lens)]
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
             lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
             text_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
-            lang_mask = ys_pad_src == 2
-            lang_ids = lang_ids.masked_fill(lang_mask, 1).long()
-            ys_pad_trg = ys_pad_trg.masked_fill(~lang_mask, -1)
-            text_embed = self.word_embed(ys_pad_src)
-            text_embed = text_embed + self.lang_embed(lang_ids)
-            text_embed = self.position_embed(text_embed)
-            embed = torch.cat([text_embed, speech_embed], dim=1)
+            ys_embeded = self.word_embed(ys_pad_src)
+            seq_length = ys_pad_src.size(1)
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=ys_pad_src.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(ys_pad_src)
+            position_embeded = self.position_embed(position_ids)
+            lang_ids = torch.zeros_like(ys_pad_src)
+            lang_embeded = self.lang_embed(lang_ids)
+            word_embeddings = ys_embeded + position_embeded + lang_embeded
+            embeddings = torch.cat([word_embeddings, speech_embeddings], dim=1)
+            embeddings = self.dropout(self.embed_norm(embeddings))
             mask = torch.cat([text_mask, speech_mask], dim=-1)
-            hs_pad, hs_mask = self.encoder(embed, mask)
+            hs_pad, hs_mask = self.encoder(embeddings, mask)
             hs_pred = hs_pad[:, :max(ys_lens)]
-            pred_pad = self.output(hs_pred)
-            loss = self.criterion(pred_pad, ys_pad_trg)
+            pred_pad = self.predict(hs_pred)
+            loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
 
