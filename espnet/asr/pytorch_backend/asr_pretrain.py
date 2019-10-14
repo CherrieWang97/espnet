@@ -278,7 +278,9 @@ class CustomConverter(object):
                                for y in ys], 0).to(device)
         inputs, labels = self.mask_tokens(ys_pad)
         ylens = torch.from_numpy(np.array([len(y) for y in ys])).to(device)
-        return xs_pad, ilens, inputs, ylens, labels
+        ys_target = pad_list([torch.from_numpy(np.array(y[0][1:-1]) if isinstance(y, tuple) else y[1:-1]).long() 
+                             for y in ys], -1).to(device)
+        return xs_pad, ilens, inputs, ylens, labels, ys_target
         
 
 
@@ -442,7 +444,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=0,
+        batch_size=1, num_workers=10,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
@@ -508,6 +510,7 @@ def train(args):
     report_keys = ['epoch', 'iteration', 'main/loss',
                    'validation/main/loss', 
                    'main/acc', 'validation/main/acc',
+                   'main/loss_ctc', 'validation/main/loss_ctc',
                    'elapsed_time']
     trainer.extend(extensions.observe_value(
             'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),

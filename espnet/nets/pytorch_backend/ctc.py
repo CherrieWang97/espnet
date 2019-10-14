@@ -25,7 +25,7 @@ class CTC(torch.nn.Module):
         self.ctc_type = ctc_type
 
         if self.ctc_type == 'builtin':
-            reduction_type = 'sum' if reduce else 'none'
+            reduction_type = 'mean' if reduce else 'none'
             self.ctc_loss = torch.nn.CTCLoss(reduction=reduction_type)
         elif self.ctc_type == 'warpctc':
             import warpctc_pytorch as warp_ctc
@@ -42,7 +42,7 @@ class CTC(torch.nn.Module):
             th_pred = th_pred.log_softmax(2)
             loss = self.ctc_loss(th_pred, th_target, th_ilen, th_olen)
             # Batch-size average
-            loss = loss / th_pred.size(1)
+            #loss = loss / th_pred.size(1)
             return loss
         elif self.ctc_type == 'warpctc':
             return self.ctc_loss(th_pred, th_target, th_ilen, th_olen)

@@ -40,10 +40,11 @@ from espnet.nets.scorers.ctc import CTCPrefixScorer
 class Reporter(chainer.Chain):
     """A chainer reporter wrapper."""
 
-    def report(self, loss, acc):
+    def report(self, loss, acc, loss_ctc):
         """Report at every step."""
         reporter.report({'acc': acc}, self)
         reporter.report({'loss': loss}, self)
+        reporter.report({'loss_ctc': loss_ctc}, self)
 
 
 class E2E(ASRInterface, torch.nn.Module):
@@ -137,7 +138,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.reset_parameters(args)
         self.tie_weights()
         self.adim = args.adim
-        self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type='warpctc', reduce=True)
+        self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type='builtin', reduce=True)
         args.report_cer = False
         args.report_wer = False
 
@@ -186,7 +187,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.predict.bias.data = bert_state['cls.predictions.bias'].data
             
 
-    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, task="tlm"):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, task="tlm"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -224,11 +225,14 @@ class E2E(ASRInterface, torch.nn.Module):
                               ignore_label=self.ignore_id)
 
         if task == "tlm":
+            #Conv layer for speech input
+            #pdb.set_trace()
             xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
             src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
             speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
             lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
             speech_embeddings = speech_pad + self.lang_embed(lang_ids)
+            #Text embedding
             ys_pad_src = ys_pad_src[:, :max(ys_lens)]
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
             lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
@@ -241,20 +245,29 @@ class E2E(ASRInterface, torch.nn.Module):
             lang_ids = torch.zeros_like(ys_pad_src)
             lang_embeded = self.lang_embed(lang_ids)
             word_embeddings = ys_embeded + position_embeded + lang_embeded
+            #Concat speech embedding and word embedding
             embeddings = torch.cat([word_embeddings, speech_embeddings], dim=1)
             embeddings = self.dropout(self.embed_norm(embeddings))
             mask = torch.cat([text_mask, speech_mask], dim=-1)
+            # encoder forward
             hs_pad, hs_mask = self.encoder(embeddings, mask)
+            # masked language model predict
             hs_pred = hs_pad[:, :max(ys_lens)]
             pred_pad = self.predict(hs_pred)
             loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
+            # CTC predict
+            speech_pred = hs_pad[:, max(ys_lens):]
+            batch_size = hs_pad.size(0)
+            hlens = speech_mask.view(batch_size, -1).sum(1)
+            ctc_loss = self.ctc(speech_pred.view(batch_size, -1, self.adim), hlens, ys_pad)
 
-        self.loss = loss
-        loss_data = float(self.loss)
+        self.loss = loss + ctc_loss
+        loss_data = float(loss)
+        ctc_loss_data = float(ctc_loss)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_data, acc)
+            self.reporter.report(loss_data, acc, ctc_loss_data)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss
