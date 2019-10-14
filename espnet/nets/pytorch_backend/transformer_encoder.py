@@ -187,7 +187,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.predict.bias.data = bert_state['cls.predictions.bias'].data
             
 
-    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, task="tlm"):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, task="tlm_ctc"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -224,7 +224,7 @@ class E2E(ASRInterface, torch.nn.Module):
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
 
-        if task == "tlm":
+        if task.contains("tlm"):
             #Conv layer for speech input
             #pdb.set_trace()
             xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
@@ -257,15 +257,18 @@ class E2E(ASRInterface, torch.nn.Module):
             loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
             acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
-            # CTC predict
-            speech_pred = hs_pad[:, max(ys_lens):]
-            batch_size = hs_pad.size(0)
-            hlens = speech_mask.view(batch_size, -1).sum(1)
-            ctc_loss = self.ctc(speech_pred.view(batch_size, -1, self.adim), hlens, ys_pad)
+            self.loss = loss
+            ctc_loss_data = None
+            if task.contains('ctc'):
+                # CTC predict
+                speech_pred = hs_pad[:, max(ys_lens):]
+                batch_size = hs_pad.size(0)
+                hlens = speech_mask.view(batch_size, -1).sum(1)
+                ctc_loss = self.ctc(speech_pred.view(batch_size, -1, self.adim), hlens, ys_pad)
+                self.loss += ctc_loss
+                ctc_loss_data = float(ctc_loss)
 
-        self.loss = loss + ctc_loss
         loss_data = float(loss)
-        ctc_loss_data = float(ctc_loss)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
             self.reporter.report(loss_data, acc, ctc_loss_data)
         else:
