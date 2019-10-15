@@ -40,11 +40,13 @@ from espnet.nets.scorers.ctc import CTCPrefixScorer
 class Reporter(chainer.Chain):
     """A chainer reporter wrapper."""
 
-    def report(self, loss, acc, loss_ctc):
+    def report(self, loss, acc, loss_ctc=None, loss_seq=None, acc_seq=None):
         """Report at every step."""
         reporter.report({'acc': acc}, self)
         reporter.report({'loss': loss}, self)
         reporter.report({'loss_ctc': loss_ctc}, self)
+        reporter.report({'loss_seq': loss_seq}, self)
+        reporter.report({'acc_seq': acc_seq}, self)
 
 
 class E2E(ASRInterface, torch.nn.Module):
@@ -55,7 +57,6 @@ class E2E(ASRInterface, torch.nn.Module):
     :param Namespace args: argument Namespace containing options
 
     """
-
     @staticmethod
     def add_arguments(parser):
         """Add arguments."""
@@ -84,6 +85,13 @@ class E2E(ASRInterface, torch.nn.Module):
                            help='Number of encoder layers (for shared recognition part in multi-speaker asr mode)')
         group.add_argument('--eunits', '-u', default=300, type=int,
                            help='Number of encoder hidden units')
+        # Decoder
+        group.add_argument('--dlayers', default=6, type=int,
+                           help='Number of decoder layers (for st task)')
+        group.add_argument('--dunits', default=1024, type=int,
+                           help='Number of decoder hidden units')
+        group.add_argument('--use-decoder', default=False, type=strtobool,
+                           help="use transformer decoder.")
         # Attention
         group.add_argument('--adim', default=320, type=int,
                            help='Number of attention transformation dimensions')
@@ -122,11 +130,27 @@ class E2E(ASRInterface, torch.nn.Module):
                 concat_after=False
              )
         )
+        self.use_decoder = args.use_decoder
+        if args.use_decoder:
+            self.decoder = Decoder(
+                odim=odim,
+                attention_dim=args.adim,
+                attention_heads=args.aheads,
+                linear_units=args.dunits,
+                num_blocks=args.dlayers,
+                dropout_rate=args.dropout_rate,
+                positional_dropout_rate=args.dropout_rate,
+                self_attention_dropout_rate=args.transformer_attn_dropout_rate,
+                src_attention_dropout_rate=args.transformer_attn_dropout_rate
+            )
         self.embed_norm = LayerNorm(args.adim)
         self.dropout = torch.nn.Dropout(args.dropout_rate)
-        self.predict = LMPredictionHead(args.adim, odim)
-        self.sos = odim - 1
-        self.eos = odim - 1
+        self.predict = LMPredictionHead(args.adim, odim)  # head for masked language model
+        self.pooler_lin = torch.nn.Linear(args.adim, args.adim)
+        self.pooler_act = torch.nn.Tanh()
+        self.seq_relationship = torch.nn.Linear(args.adim, 2)
+        self.sos = 101
+        self.eos = 102
         self.odim = odim
         self.ignore_id = ignore_id
         self.subsample = [1]
@@ -142,10 +166,6 @@ class E2E(ASRInterface, torch.nn.Module):
         args.report_cer = False
         args.report_wer = False
 
-        from espnet.nets.e2e_asr_common import ErrorCalculator
-        self.error_calculator = ErrorCalculator(args.char_list,
-                                                args.sym_space, args.sym_blank,
-                                                args.report_cer, args.report_wer)
         self.rnnlm = None
 
     def reset_parameters(self, args):
@@ -185,13 +205,75 @@ class E2E(ASRInterface, torch.nn.Module):
         self.predict.norm.bias.data = bert_state['cls.predictions.transform.LayerNorm.bias'].data
         self.predict.decoder.weight.data = bert_state['cls.predictions.decoder.weight'].data
         self.predict.bias.data = bert_state['cls.predictions.bias'].data
-            
 
-    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, task="tlm_ctc"):
+    def get_position_embedding(self, input):
+        seq_len = input.size(1)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=input.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(input)
+        position_embeddings = self.position_embed(position_ids)
+        return position_embeddings
+
+    def mask_lm_forward(self, input, ilens, target):
+        input = input[:, max(ilens)]
+        target = target[:, max(ilens)]
+        mask = (~make_pad_mask(ilens.tolist())).to(input.device).unsqueeze(-2)
+        word_embeddings = self.word_embed(input)
+        position_embeddings = self.get_position_embedding(input)
+        lang_ids = torch.zeros_like(input)
+        lang_embeddings = self.lang_embed(lang_ids)
+        embeddings = word_embeddings + position_embeddings + lang_embeddings
+        embeddings = self.dropout(self.embed_norm(embeddings))
+        hs_pad, hs_mask = self.encoder(embeddings, mask)
+        logit = self.predict(hs_pad)
+        loss = self.criterion(logit.view(-1, self.odim), target.contiguous().view(-1))
+        acc = th_accuracy(logit.view(-1, self.odim), target, ignore_label=self.ignore_id)
+        self.reporter.report(float(loss), acc, None)
+        return loss
+
+    def speech_text_forward(self, xs_pad, ilens, ys_pad_src, ys_lens):
+        # speech forward
+        xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
+        src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
+        speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
+        lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
+        speech_embeddings = speech_pad + self.lang_embed(lang_ids)
+        # text forward
+        ys_pad_src = ys_pad_src[:, :max(ys_lens)]
+        text_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
+        ys_embeded = self.word_embed(ys_pad_src)
+        seq_length = ys_pad_src.size(1)
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=ys_pad_src.device)
+        position_ids = position_ids.unsqueeze(0).expand_as(ys_pad_src)
+        position_embeded = self.position_embed(position_ids)
+        lang_ids = torch.zeros_like(ys_pad_src)
+        lang_embeded = self.lang_embed(lang_ids)
+        word_embeddings = ys_embeded + position_embeded + lang_embeded
+        # encoder forward
+        embeddings = torch.cat([word_embeddings, speech_embeddings], dim=1)
+        embeddings = self.dropout(self.embed_norm(embeddings))
+        mask = torch.cat([text_mask, speech_mask], dim=-1)
+        hs_pad, hs_mask = self.encoder(embeddings, mask)
+        return hs_pad, hs_mask
+
+    def speech_forward(self, xs_pad, ilens):
+        xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
+        src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
+        speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
+        lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
+        speech_embeddings = speech_pad + self.lang_embed(lang_ids)
+        embeddings = self.dropout(self.embed_norm(speech_embeddings))
+        hs_pad, hs_mask = self.encoder(embeddings, speech_mask)
+        return hs_pad, hs_mask
+
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, label=None, task="slm_ctc"):
         """E2E forward.
 
-        :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
-        :param torch.Tensor ilens: batch of lengths of source sequences (B)
+        :param torch.Tensor xs_pad: batch of padded source speech sequences (B, Tmax, idim)
+        :param torch.Tensor ilens: batch of lengths of source speech sequences (B)
+        :param torch.Tensor ys_pad_src: batch of padded source text sequences (B, Lmax)
+        :param torch.Tensor ys_lens: batch of lengths of soruce text sequences (B)
+        :param torch.Tensor ys_pad_trg: batch of lengths of masked language model target
+        :param torch.Tensor ys_pad: target sequence for CTC or ST
         :param torch.Tensor ys_pad: batch of padded target sequences (B, Lmax)
         :return: ctc loass value
         :rtype: torch.Tensor
@@ -200,80 +282,63 @@ class E2E(ASRInterface, torch.nn.Module):
         :return: accuracy in attention decoder
         :rtype: float
         """
-        if task == "mlm" or task == "cmlm":
-            ys_pad_src = ys_pad_src[:, :max(ys_lens)]
-            ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
-            lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
-            #lang_mask = ys_pad_src == 2
-            src_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
-            #lang_ids = lang_ids.masked_fill(lang_mask, 1).long()
-            #ys_pad_trg = ys_pad_trg.masked_fill(~lang_mask, -1)
-            ys_embeded = self.word_embed(ys_pad_src)
-            seq_length = ys_pad_src.size(1)
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=ys_pad_src.device)
-            position_ids = position_ids.unsqueeze(0).expand_as(ys_pad_src)
-            position_embeded = self.position_embed(position_ids)
-            lang_ids = torch.zeros_like(ys_pad_src)
-            lang_embeded = self.lang_embed(lang_ids)
-            embeddings = ys_embeded + position_embeded + lang_embeded
-            embeddings = self.dropout(self.embed_norm(embeddings))
-          
-            hs_pad, hs_mask = self.encoder(embeddings, src_mask)
-            pred_pad = self.predict(hs_pad)
-            loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
-            acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
-                              ignore_label=self.ignore_id)
+        if task == "mlm":
+            return self.mask_lm_forward(ys_pad_src, ys_lens, ys_pad_trg)
 
-        if task.contains("tlm"):
+        if task.contains("slm"):
             #Conv layer for speech input
-            #pdb.set_trace()
-            xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
-            src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-            speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
-            lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
-            speech_embeddings = speech_pad + self.lang_embed(lang_ids)
             #Text embedding
-            ys_pad_src = ys_pad_src[:, :max(ys_lens)]
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
-            lang_ids = torch.zeros_like(ys_pad_src).long().to(ys_pad_src.device)
-            text_mask = (~make_pad_mask(ys_lens.tolist())).to(ys_pad_src.device).unsqueeze(-2)
-            ys_embeded = self.word_embed(ys_pad_src)
-            seq_length = ys_pad_src.size(1)
-            position_ids = torch.arange(seq_length, dtype=torch.long, device=ys_pad_src.device)
-            position_ids = position_ids.unsqueeze(0).expand_as(ys_pad_src)
-            position_embeded = self.position_embed(position_ids)
-            lang_ids = torch.zeros_like(ys_pad_src)
-            lang_embeded = self.lang_embed(lang_ids)
-            word_embeddings = ys_embeded + position_embeded + lang_embeded
-            #Concat speech embedding and word embedding
-            embeddings = torch.cat([word_embeddings, speech_embeddings], dim=1)
-            embeddings = self.dropout(self.embed_norm(embeddings))
-            mask = torch.cat([text_mask, speech_mask], dim=-1)
-            # encoder forward
-            hs_pad, hs_mask = self.encoder(embeddings, mask)
+            hs_pad, hs_mask = self.speech_text_forward(xs_pad, ilens, ys_pad_src, ys_lens)
             # masked language model predict
-            hs_pred = hs_pad[:, :max(ys_lens)]
-            pred_pad = self.predict(hs_pred)
-            loss = self.criterion(pred_pad.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
-            acc = th_accuracy(pred_pad.view(-1, self.odim), ys_pad_trg,
+            mlm_pred = hs_pad[:, :max(ys_lens)]
+            logit = self.predict(mlm_pred)
+            loss = self.criterion(logit.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
+            acc = th_accuracy(logit.view(-1, self.odim), ys_pad_trg,
                               ignore_label=self.ignore_id)
             self.loss = loss
             ctc_loss_data = None
+            relationship_loss = None
             if task.contains('ctc'):
                 # CTC predict
                 speech_pred = hs_pad[:, max(ys_lens):]
+                speech_mask = hs_mask[:, max(ys_lens):]
                 batch_size = hs_pad.size(0)
                 hlens = speech_mask.view(batch_size, -1).sum(1)
                 ctc_loss = self.ctc(speech_pred.view(batch_size, -1, self.adim), hlens, ys_pad)
                 self.loss += ctc_loss
                 ctc_loss_data = float(ctc_loss)
 
-        loss_data = float(loss)
-        if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_data, acc, ctc_loss_data)
-        else:
-            logging.warning('loss (=%f) is not correct', loss_data)
+            if task.contains('rlp'):
+                first_token_tensor = hs_pad[:, 0]
+                pooled_output = self.pooler_act(self.pooler_lin(first_token_tensor))
+                seq_relationship_score = self.seq_relationship(pooled_output)
+                seq_loss = self.criterion(seq_relationship_score.view(-1, 2), label.view(-1))
+                self.loss += seq_loss
+                relationship_loss = float(seq_loss)
+                relationship_acc = th_accuracy(seq_relationship_score.view(-1, 2), label, ignore_label=self.ignore_id)
+            loss_data = float(loss)
+            if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
+                self.reporter.report(loss_data, acc, ctc_loss_data, relationship_loss, relationship_acc)
+            else:
+                logging.warning('loss (=%f) is not correct', loss_data)
+
+        if task == "st":
+            assert self.use_decoder
+            hs_pad, hs_mask = self.speech_forward(xs_pad, ilens)
+            ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
+            ys_mask = target_mask(ys_in_pad, self.ignore_id)
+            pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad, hs_mask)
+            self.pred_pad = pred_pad
+
+            # 3. compute attention loss
+            loss_att = self.criterion(pred_pad, ys_out_pad)
+            acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad,
+                              ignore_label=self.ignore_id)
+            self.loss = loss_att
+            self.reporter.report(float(self.loss), acc)
         return self.loss
+
 
     def scorers(self):
         """Scorers."""
