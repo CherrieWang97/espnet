@@ -235,7 +235,7 @@ class CustomConverter(object):
         return inputs, labels
     
 
-    def __call__(self, batch, device=torch.device('cpu')):
+    def __call__(self, batch, device=torch.device('cpu'), task="st"):
         """Transform a batch and send it to a device.
 
         Args:
@@ -274,6 +274,11 @@ class CustomConverter(object):
             xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
         # NOTE: this is for multi-task learning (e.g., speech translation)
         ilens = torch.from_numpy(ilens).to(device)
+        if task == "st":
+            ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
+                              for y in ys], -1).to(device) 
+        return xs_pad, ilens, None, None, None, ys_pad
+
         ys_pad = pad_list([torch.from_numpy(np.array(y[0]) if isinstance(y, tuple) else y).long()
                                for y in ys], 0).to(device)
         inputs, labels = self.mask_tokens(ys_pad)
@@ -323,9 +328,9 @@ def train(args):
         model = load_trained_modules(idim, odim, args)
     else:
         model_class = dynamic_import(args.model_module)
-        model = model_class(idim, 30522, args)
+        model = model_class(idim, 30522, odim, args)
     assert isinstance(model, ASRInterface)
-    model.load_weight_from_bert('exp/bert.model')
+    #model.load_weight_from_bert('exp/bert.model')
 
     subsampling_factor = model.subsample[0]
 

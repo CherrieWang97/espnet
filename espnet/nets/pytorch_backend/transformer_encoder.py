@@ -103,7 +103,7 @@ class E2E(ASRInterface, torch.nn.Module):
     def attention_plot_class(self):
         return PlotAttentionReport
 
-    def __init__(self, idim, odim, args, ignore_id=-1, asr_model=None, mt_model=None):
+    def __init__(self, idim, src_size, trg_size, args, ignore_id=-1, asr_model=None, mt_model=None):
         """Construct an E2E object.
 
         :param int idim: dimension of inputs
@@ -114,7 +114,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if args.transformer_attn_dropout_rate is None:
             args.transformer_attn_dropout_rate = args.dropout_rate
         self.speech_embed = Conv2dSubsampling(idim, args.adim, args.dropout_rate)
-        self.word_embed = torch.nn.Embedding(odim, args.adim, padding_idx=0)
+        self.word_embed = torch.nn.Embedding(src_size, args.adim, padding_idx=0)
         self.position_embed = torch.nn.Embedding(512, args.adim)
         self.lang_embed = torch.nn.Embedding(2, args.adim)
         positionwise_args = (args.adim, args.eunits, args.dropout_rate)
@@ -133,7 +133,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.use_decoder = args.use_decoder
         if args.use_decoder:
             self.decoder = Decoder(
-                odim=odim,
+                odim=trg_size,
                 attention_dim=args.adim,
                 attention_heads=args.aheads,
                 linear_units=args.dunits,
@@ -145,13 +145,14 @@ class E2E(ASRInterface, torch.nn.Module):
             )
         self.embed_norm = LayerNorm(args.adim)
         self.dropout = torch.nn.Dropout(args.dropout_rate)
-        self.predict = LMPredictionHead(args.adim, odim)  # head for masked language model
+        self.predict = LMPredictionHead(args.adim, src_size)  # head for masked language model
         self.pooler_lin = torch.nn.Linear(args.adim, args.adim)
         self.pooler_act = torch.nn.Tanh()
         self.seq_relationship = torch.nn.Linear(args.adim, 2)
-        self.sos = 101
-        self.eos = 102
-        self.odim = odim
+        self.sos = trg_size - 1
+        self.eos = trg_size - 1
+        self.src_size = src_size
+        self.trg_size = trg_size
         self.ignore_id = ignore_id
         self.subsample = [1]
         self.reporter = Reporter()
@@ -162,7 +163,7 @@ class E2E(ASRInterface, torch.nn.Module):
         self.reset_parameters(args)
         self.tie_weights()
         self.adim = args.adim
-        self.ctc = CTC(odim, args.adim, args.dropout_rate, ctc_type='builtin', reduce=True)
+        self.ctc = CTC(src_size, args.adim, args.dropout_rate, ctc_type='builtin', reduce=True)
         args.report_cer = False
         args.report_wer = False
 
@@ -206,6 +207,14 @@ class E2E(ASRInterface, torch.nn.Module):
         self.predict.decoder.weight.data = bert_state['cls.predictions.decoder.weight'].data
         self.predict.bias.data = bert_state['cls.predictions.bias'].data
 
+    def load_pretrained_weight(self, path):
+        state = dict(torch.load(path))
+        params = dict(self.named_parameters())
+        for k, v in state.items():
+            if k in params and params[k].size() == v.size():
+                params[k].data = v.data
+                logging.warning('load state %s from pretrained state dict' % k)
+
     def get_position_embedding(self, input):
         seq_len = input.size(1)
         position_ids = torch.arange(seq_len, dtype=torch.long, device=input.device)
@@ -225,8 +234,8 @@ class E2E(ASRInterface, torch.nn.Module):
         embeddings = self.dropout(self.embed_norm(embeddings))
         hs_pad, hs_mask = self.encoder(embeddings, mask)
         logit = self.predict(hs_pad)
-        loss = self.criterion(logit.view(-1, self.odim), target.contiguous().view(-1))
-        acc = th_accuracy(logit.view(-1, self.odim), target, ignore_label=self.ignore_id)
+        loss = self.criterion(logit.view(-1, self.src_size), target.contiguous().view(-1))
+        acc = th_accuracy(logit.view(-1, self.src_size), target, ignore_label=self.ignore_id)
         self.reporter.report(float(loss), acc, None)
         return loss
 
@@ -255,6 +264,15 @@ class E2E(ASRInterface, torch.nn.Module):
         hs_pad, hs_mask = self.encoder(embeddings, mask)
         return hs_pad, hs_mask
 
+        xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
+        src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
+        speech_pad, speech_mask = self.speech_embed(xs_pad, src_mask)
+        lang_ids = torch.ones((speech_pad.size(0), speech_pad.size(1))).long().to(xs_pad.device)
+        speech_embeddings = speech_pad + self.lang_embed(lang_ids)
+        embeddings = self.dropout(self.embed_norm(speech_embeddings))
+        hs_pad, hs_mask = self.encoder(embeddings, speech_mask)
+        return hs_pad, hs_mask
+
     def speech_forward(self, xs_pad, ilens):
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
@@ -265,7 +283,7 @@ class E2E(ASRInterface, torch.nn.Module):
         hs_pad, hs_mask = self.encoder(embeddings, speech_mask)
         return hs_pad, hs_mask
 
-    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, label=None, task="slm_ctc"):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_lens, ys_pad_trg, ys_pad=None, label=None, task="st"):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source speech sequences (B, Tmax, idim)
@@ -285,7 +303,7 @@ class E2E(ASRInterface, torch.nn.Module):
         if task == "mlm":
             return self.mask_lm_forward(ys_pad_src, ys_lens, ys_pad_trg)
 
-        if task.contains("slm"):
+        if "slm" in task:
             #Conv layer for speech input
             #Text embedding
             ys_pad_trg = ys_pad_trg[:, :max(ys_lens)]
@@ -293,13 +311,13 @@ class E2E(ASRInterface, torch.nn.Module):
             # masked language model predict
             mlm_pred = hs_pad[:, :max(ys_lens)]
             logit = self.predict(mlm_pred)
-            loss = self.criterion(logit.view(-1, self.odim), ys_pad_trg.contiguous().view(-1))
-            acc = th_accuracy(logit.view(-1, self.odim), ys_pad_trg,
+            loss = self.criterion(logit.view(-1, self.src_size), ys_pad_trg.contiguous().view(-1))
+            acc = th_accuracy(logit.view(-1, self.src_size), ys_pad_trg,
                               ignore_label=self.ignore_id)
             self.loss = loss
             ctc_loss_data = None
             relationship_loss = None
-            if task.contains('ctc'):
+            if 'ctc' in task:
                 # CTC predict
                 speech_pred = hs_pad[:, max(ys_lens):]
                 speech_mask = hs_mask[:, max(ys_lens):]
@@ -309,7 +327,7 @@ class E2E(ASRInterface, torch.nn.Module):
                 self.loss += ctc_loss
                 ctc_loss_data = float(ctc_loss)
 
-            if task.contains('rlp'):
+            if 'rlp' in task:
                 first_token_tensor = hs_pad[:, 0]
                 pooled_output = self.pooler_act(self.pooler_lin(first_token_tensor))
                 seq_relationship_score = self.seq_relationship(pooled_output)
@@ -332,8 +350,8 @@ class E2E(ASRInterface, torch.nn.Module):
             self.pred_pad = pred_pad
 
             # 3. compute attention loss
-            loss_att = self.criterion(pred_pad, ys_out_pad)
-            acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad,
+            loss_att = self.criterion(pred_pad.view(-1, self.trg_size), ys_out_pad.view(-1))
+            acc = th_accuracy(pred_pad.view(-1, self.trg_size), ys_out_pad,
                               ignore_label=self.ignore_id)
             self.loss = loss_att
             self.reporter.report(float(self.loss), acc)
