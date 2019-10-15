@@ -22,9 +22,7 @@ def main(args):
         ('matplotlib', None),
         ('torch', ("0.4.1", "1.0.0", "1.0.1.post2")),
         ('chainer', ("6.0.0")),
-        ('chainer_ctc', None),
-        ('warpctc_pytorch', ("0.1.1")),
-        ('warprnnt_pytorch', ("0.1"))
+        ('warpctc_pytorch', ("0.1.3"))
     ]
 
     if not args.no_cupy:
