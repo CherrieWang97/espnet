@@ -5,7 +5,7 @@ PYTHON :=
 # NOTE(kan-bayashi): Use 3.7.3 to avoid sentencepiece installation error
 PYTHON_VERSION := 3.7.3
 CUPY_VERSION := 6.0.0
-CUDA_VERSION := 9.0
+CUDA_VERSION := 10.0
 # PyTorch version: 0.4.1 or 1.0.0 or 1.0.1
 TH_VERSION := 1.0.1
 # Use a prebuild Kaldi to omit the installation
@@ -31,9 +31,9 @@ endif
 
 all: kaldi.done python check_install
 
-python: venv $(CUDA_DEPS) warp-ctc.done
+python: venv $(CUDA_DEPS) warp-ctc.done moses.done mwerSegmenter.done
 
-extra: nkf.done mecab.done moses.done mwerSegmenter.done pesq warp-transducer.done chainer_ctc.done
+extra: nkf.done mecab.done pesq warp-transducer.done chainer_ctc.done
 
 ifneq ($(strip $(KALDI)),)
 kaldi.done:
