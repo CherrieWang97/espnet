@@ -521,7 +521,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=0,
+        batch_size=1, num_workers=10,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(
