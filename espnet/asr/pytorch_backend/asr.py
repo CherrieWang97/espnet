@@ -274,6 +274,91 @@ class CustomConverter(object):
         
         return xs_pad, ilens, ys_pad
 
+class MaskConverter(object):
+    """Custom batch converter for Pytorch.
+
+    Args:
+        subsampling_factor (int): The subsampling factor.
+        dtype (torch.dtype): Data type to convert.
+
+    """
+
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, mask_ratio=0.15):
+        """Construct a MaskConverter object."""
+        self.subsampling_factor = subsampling_factor
+        self.ignore_id = -1
+        self.dtype = dtype
+        self.mask_ratio = mask_ratio
+
+    def mask_feats(self, feat, params):
+        tag, start, end, label = params
+        seq_len = label.shape[0]
+        mask_id = np.random.randint(0, seq_len)
+        label = label[mask_id]
+        start = start[mask_id]
+        end = end[mask_id]
+        feat[start:end] = feat.mean()
+        return feat, label, start, end, mask_id
+
+    def __call__(self, batch, device=torch.device('cpu')):
+        """Transform a batch and send it to a device.
+
+        Args:
+            batch (list): The batch to transform.
+            device (torch.device): The device to send to.
+
+        Returns:
+            tuple(torch.Tensor, torch.Tensor, torch.Tensor)
+
+        """
+        # batch should be located in list
+        assert len(batch) == 1
+        xs, ys = batch[0]
+        ys = list(ys)
+        masked_xs = []
+        masked_label = []
+        mask_ids = []
+        mask_mats = []
+        for i in range(len(xs)):
+            x, y, start, end, mask_id = self.mask_feats(xs[i], ys[i])
+            masked_xs.append(x)
+            masked_label.append(y)
+            mask = np.array([0] * len(x))
+            mask[start:end] = 1
+            mask_mats.append(mask)
+            mask_ids.append(mask_id)
+        xs = masked_xs
+        ys = masked_label
+        
+        # perform subsampling
+        if self.subsampling_factor > 1:
+            xs = [x[::self.subsampling_factor, :] for x in xs]
+
+        # get batch of lengths of input sequences
+        ilens = np.array([x.shape[0] for x in xs])
+        ilens = torch.from_numpy(ilens).to(device)
+        xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
+
+        # NOTE: this is for multi-task learning (e.g., speech translation)
+        ys_pad = torch.from_numpy(np.array(ys))
+        mask = pad_list([torch.from_numpy(m).byte() for m in mask_mats], 0).to(device)
+        """
+        labels = ys_pad.clone()
+        token_mask = torch.bernoulli(torch.full(labels.shape, self.mask_ratio)).byte()
+        mask = token_mask & ~tag
+        index = (mask == 1).nonzero()
+        mask_start = []
+        mask_end = []
+        for idx in index:
+           batch_id = index[0][0]
+           token_id = index[0][1]
+           start_id = start[batch_id][token_id]
+           end_id = end[batch_id][token_id]
+           xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
+        pdb.set_trace()
+        """
+        return xs_pad, ilens, ys_pad, mask
+
 
 def train(args):
     """Train with the given args.
@@ -289,11 +374,11 @@ def train(args):
         logging.warning('cuda is not available')
 
     # get input and output dimension info
-    with open(args.valid_json, 'rb') as f:
-        valid_json = json.load(f)['utts']
-    utts = list(valid_json.keys())
-    idim = int(valid_json[utts[0]]['input'][0]['shape'][-1])
-    odim = int(valid_json[utts[0]]['output'][0]['shape'][-1])
+    with open(args.train_json, 'rb') as f:
+        train_json = json.load(f)['utts']
+    utts = list(train_json.keys())
+    idim = int(train_json[utts[0]]['input'][0]['shape'][-1])
+    odim = int(train_json[utts[0]]['output'][0]['shape'][-1])
     logging.info('#input dims : ' + str(idim))
     logging.info('#output dims: ' + str(odim))
 
@@ -388,14 +473,15 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
+    """
     with open(args.train_json, 'rb') as f:
         train_json = json.load(f)['utts']
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
-
+    """
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     train = make_batchset(train_json, args.batch_size,
@@ -407,6 +493,7 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    """
     valid = make_batchset(valid_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
@@ -415,15 +502,18 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    """
     logging.warning('train data size: {}'.format(len(train)))
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
     )
+    """
     load_cv = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
+    """
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
     # default collate function converts numpy array to pytorch tensor
@@ -431,13 +521,14 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=10,
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
+    """
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
         batch_size=1, shuffle=False, collate_fn=lambda x: x[0],
         num_workers=10)}
-
+    """
     # Set up a trainer
     updater = CustomUpdater(
         model, args.grad_clip, train_iter, optimizer,
@@ -455,7 +546,7 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
+    #trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
     """
@@ -528,6 +619,11 @@ def train(args):
             'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
             trigger=(args.report_interval_iters, 'iteration'))
         report_keys.append('eps')
+    if args.opt == 'noam':
+        trainer.extend(extensions.observe_value(
+            'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
+            trigger=(args.report_interval_iters, 'iteration'))
+        report_keys.append('lr')
     if args.report_cer:
         report_keys.append('validation/main/cer')
     if args.report_wer:
