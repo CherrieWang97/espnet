@@ -104,7 +104,7 @@ def batchfy_by_bin(sorted_data, batch_bins, num_batches=0, min_batch_size=1, sho
                 max_olen = olen
             if ilen > max_ilen:
                 max_ilen = ilen
-            next_size = (max_olen + max_ilen) * (b + 1)
+            next_size = max_ilen * (b + 1)
             if next_size <= batch_bins:
                 b += 1
             elif next_size == 0:
