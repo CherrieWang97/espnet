@@ -1,6 +1,5 @@
 import itertools
 import logging
-
 import numpy as np
 
 
@@ -97,12 +96,15 @@ def batchfy_by_bin(sorted_data, batch_bins, num_batches=0, min_batch_size=1, sho
         b = 0
         next_size = 0
         max_olen = 0
+        max_ilen = 0
         while next_size < batch_bins and (start + b) < length:
             ilen = int(sorted_data[start + b][1][ikey][0]['shape'][0]) * idim
             olen = int(sorted_data[start + b][1][okey][0]['shape'][0]) * odim
             if olen > max_olen:
                 max_olen = olen
-            next_size = (max_olen + ilen) * (b + 1)
+            if ilen > max_ilen:
+                max_ilen = ilen
+            next_size = max_ilen * (b + 1)
             if next_size <= batch_bins:
                 b += 1
             elif next_size == 0:

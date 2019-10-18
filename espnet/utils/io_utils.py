@@ -11,7 +11,21 @@ import soundfile
 
 from espnet.transform.transformation import Transformation
 
-
+def create_mask_feat(x, tag, start, end, label, mask_ratio=0.15):
+    cloned = x.copy()
+    length = tag.shape(0)
+    mask_start = []
+    mask_end = []
+    mask_label = []
+    for i in range(length):
+        if random.random() < mask_ratio and tag[i] == 0:
+            cloned[start[i]:end[i]] = x.mean()
+            mask_start.append(start[i])
+            mask_end.append(end[i])
+            mask_label.append(label[i])
+        else:
+            mask_label.append(-1)
+            
 class LoadInputsAndTargets(object):
     """Create a mini-batch from a list of dicts
 
@@ -47,6 +61,7 @@ class LoadInputsAndTargets(object):
                  use_second_target=False,
                  preprocess_args=None,
                  keep_all_data_on_mem=False,
+                 create_mask=True,
                  ):
         self._loaders = {}
         if mode not in ['asr', 'tts', 'mt', 'tp']:
@@ -76,6 +91,7 @@ class LoadInputsAndTargets(object):
         self.sort_in_input_length = sort_in_input_length
         self.use_speaker_embedding = use_speaker_embedding
         self.use_second_target = use_second_target
+        self.create_mask = create_mask
         if preprocess_args is None:
             self.preprocess_args = {}
         else:
@@ -153,6 +169,18 @@ class LoadInputsAndTargets(object):
                         tp = inp['transcript']
                         tp_list.append(tp)
                         x = np.concatenate((np.asarray([102]), x, np.asarray([102])))
+                    if 'tag' in inp:
+                        tag = np.fromiter(map(int, inp['tag'].split()),
+                                          dtype=np.int64)
+                        y_feats_dict.setdefault('tag', []).append(tag)
+                    if 'start' in inp:
+                        start = np.fromiter(map(int, inp['start'].split()),
+                                          dtype=np.int64)
+                        y_feats_dict.setdefault('start', []).append(start)
+                    if 'end' in inp:
+                        end = np.fromiter(map(int, inp['end'].split()),
+                                          dtype=np.int64)
+                        y_feats_dict.setdefault('end', []).append(end)
                     y_feats_dict.setdefault(inp['name'], []).append(x)
                    
 
