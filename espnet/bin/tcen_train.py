@@ -115,7 +115,7 @@ def get_parser(parser=None, required=True):
     # minibatch related
     parser.add_argument('--sortagrad', default=0, type=int, nargs='?',
                         help="How many epochs to use sortagrad for. 0 = deactivated, -1 = all epochs")
-    parser.add_argument('--batch-count', default='auto', choices=BATCH_COUNT_CHOICES,
+    parser.add_argument('--batch-count', default='seq', choices=BATCH_COUNT_CHOICES,
                         help='How to count batch_size. The default (auto) will find how to count by args.')
     parser.add_argument('--batch-size', '--batch-seqs', '-b', default=0, type=int,
                         help='Maximum seqs in a minibatch (0 to disable)')

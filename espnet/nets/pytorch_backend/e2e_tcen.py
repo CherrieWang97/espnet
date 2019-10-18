@@ -198,7 +198,7 @@ class E2E(STInterface, torch.nn.Module):
         self.dropout = torch.nn.Dropout(p=args.dropout_rate)
         # ctc
         self.ctc = ctc_for(args, mdim)
-        self.ctc.ctc_lo = torch.nn.Linear(args.eprojs, mdim, bias=False)
+        #self.ctc.ctc_lo = torch.nn.Linear(args.eprojs, mdim, bias=False)
 
         # attention (st)
         self.att = att_for(args)

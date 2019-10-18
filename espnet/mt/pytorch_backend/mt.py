@@ -88,7 +88,7 @@ class CustomConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         ys_pad = pad_list([torch.from_numpy(y).long() for y in ys], self.ignore_id).to(device)
 
-        return xs_pad, ilens, ys_pad, None, None
+        return xs_pad, ilens, ys_pad
 
 
 def train(args):

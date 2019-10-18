@@ -38,7 +38,7 @@ from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTCustomConverter
 
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
-from espnet.nets.pytorch_backend.e2e_transformer_tcen import E2E
+from espnet.nets.pytorch_backend.e2e_tcen import E2E
 import espnet.nets.pytorch_backend.lm.default as lm_pytorch
 from espnet.utils.dataset import ChainerDataLoader
 from espnet.utils.dataset import TransformDataset
@@ -188,8 +188,8 @@ def train(args):
         asr_train_json = json.load(f)['utts']
     with open(args.mt_train_json, 'rb') as f:
         mt_train_json = json.load(f)['utts']
-    utts = list(asr_train_json.keys())
-    mdim = int(asr_train_json[utts[0]]['output'][0]['shape'][1])
+    utts = list(mt_train_json.keys())
+    mdim = int(mt_train_json[utts[0]]['output'][0]['shape'][1])
     logging.info('#medium dims : ' + str(mdim))
 
     # Initialize with pre-trained ASR encoder and MT decoder
@@ -277,7 +277,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter for ASR data and ST data
-    st_converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype, pad_asr=True)
+    st_converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     asr_converter = ASRCustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     # Setup a converter for MT data
     mt_converter = MTCustomConverter()
@@ -377,15 +377,15 @@ def train(args):
     trainer.extend(extensions.PlotReport(['main/loss_st', 'validation/main/loss_st',
                                           'main/loss_asr', 'main/loss_mt'],
                                          'epoch', file_name='loss.png'))
-    trainer.extend(extensions.PlotReport(['main/st_acc', 'main/asr_acc',
-                                          'main/mt_acc', 'validation/main/st_acc'],
+    trainer.extend(extensions.PlotReport(['main/acc', 
+                                          'validation/main/acc'],
                                          'epoch', file_name='acc.png'))
 
     # Save best models
     trainer.extend(snapshot_object(model, 'model.loss.best'),
                    trigger=training.triggers.MinValueTrigger('validation/main/loss_st'))
     trainer.extend(snapshot_object(model, 'model.acc.best'),
-                   trigger=training.triggers.MaxValueTrigger('validation/main/st_acc'))
+                   trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
     # save snapshot which contains model and optimizer states
     trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))
@@ -433,8 +433,8 @@ def train(args):
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(100, 'iteration')))
     report_keys = ['epoch', 'iteration', 'main/loss_st', 'main/loss_asr', 'main/loss_mt',
-                   'main/st_acc', 'main/asr_acc', 'main/mt_acc',
-                   'validation/main/loss_st', 'validation/main/st_acc']
+                   'main/acc', 
+                   'validation/main/loss_st', 'validation/main/acc']
     report_keys += ['elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
