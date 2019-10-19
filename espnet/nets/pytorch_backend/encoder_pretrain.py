@@ -141,7 +141,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad, ys_pad_mask, chunk_lens):
+    def forward(self, xs_pad, ilens, ys_pad, ys_pad_mask, starts, ends):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -160,19 +160,26 @@ class E2E(ASRInterface, torch.nn.Module):
         hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
         self.hs_pad = hs_pad
         seq_len = hs_pad.shape[1]
-        chunk_split = []
         bs = hs_pad.shape[0]
         gpu_id = hs_pad.device.index
-        for i in range(bs*gpu_id, bs*(gpu_id+1)):
-            chunk = chunk_lens[i]
-            num = seq_len - sum(chunk)
-            if num <= 0:
-                chunk[-1] = chunk[-1] + num
-            else:
-                chunk.append(seq_len - sum(chunk))
-            chunk_split.append(chunk)
+        loss = None
         hs_split_list = []
-        for i in range(len(chunk_split)):
+        for i in range(bs):
+            chunks = []
+            for j in range(len(starts[bs*gpu_id + i])):
+                start = starts[bs*gpu_id + i][j] // 4
+                end = ends[bs*gpu_id + i][j] // 4
+                if start == end:
+                    hs = hs_pad[i, start, :].unsqueeze(0)
+                else:
+                    hs = hs_pad[i, start:end, :]
+                chunks.append(torch.mean(hs, dim=0))
+            if len(chunks) == 0:
+                hs_split_list.append(torch.zeros([1, self.adim]).float().to(xs_pad.device))
+            else:
+                hs_split_list.append(torch.cat(chunks, dim=0).view(-1, self.adim))
+        cs_pad = pad_list(hs_split_list, 0).to(xs_pad.device)
+        """ 
             hs_split = torch.split(hs_pad[i], chunk_split[i])
             splits = []
             for h in hs_split:
@@ -182,16 +189,19 @@ class E2E(ASRInterface, torch.nn.Module):
                     splits.append(torch.mean(h, dim=0))
             hs_split_list.append(torch.cat(splits, dim=0).view(-1, self.adim))
         hs_pad = pad_list(hs_split_list, 0).to(xs_pad.device)
+        """
         #chunk_split = [chunk.append(seq_len - sum(chunk)) for chunk in chunk_lens]
         #mask = mask[:, :max(ilens)]
         #mask = mask[:, :-2:2][:, :-2:2]
         #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
         #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
-        pred = self.predict(hs_pad)
+        pred = self.predict(cs_pad)
         ys_pad_mask = ys_pad_mask[:, :pred.shape[1]]
         loss = self.criterion(pred, ys_pad_mask.contiguous())
         acc = th_accuracy(pred.view(-1, self.odim), ys_pad_mask, ignore_label=-1)
         self.reporter.report(None, None, acc, None, None, None, float(loss))
+        if math.isnan(float(loss)):
+            pdb.set_trace()
         return loss
 
         

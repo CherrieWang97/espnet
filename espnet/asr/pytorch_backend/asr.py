@@ -294,27 +294,29 @@ class MaskConverter(object):
         tag, start, end, label = params
         seq_len = label.shape[0]
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
+        tag_mask = np.random.binomial(1, 0.5, size=seq_len)
+        tag = tag & tag_mask
         mask = mask & ~tag
         mask_id = np.argwhere(mask == 1)
         label_mask = []
         start_id = []
         end_id = []
         fill_num = feat.mean()
-        chunk_len = []
+        #chunk_len = []
         for i in range(len(mask_id)):
             id = mask_id[i]
-            label_mask.append(-1)
+            #label_mask.append(-1)
             label_mask.append(label[id][0])
-            start_id.append(start[id][0])
-            end_id.append(end[id][0])
-            if i == 0:
-                chunk_len.append(start[id][0] // 4)
-            else:
-                chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
-            chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
+            start_id.append(int(start[id][0]))
+            end_id.append(int(end[id][0]))
+            #if i == 0:
+            #    chunk_len.append(start[id][0] // 4)
+            #else:
+            #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
+            #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
             feat[start[id][0]:end[id][0]] = fill_num
-        label_mask.append(-1)
-        return feat, label_mask, start_id, end_id, chunk_len
+        #label_mask.append(-1)
+        return feat, label_mask, start_id, end_id
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -333,12 +335,16 @@ class MaskConverter(object):
         ys = list(ys)
         masked_xs = []
         masked_label = []
-        chunk_lens = []
+        starts = []
+        ends = []
+        #chunk_lens = []
         for i in range(len(xs)):
-            x, y, start, end, chunk_len = self.mask_feats(xs[i], ys[i])
+            x, y, start, end = self.mask_feats(xs[i], ys[i])
             masked_xs.append(x)
             masked_label.append(y)
-            chunk_lens.append(chunk_len)
+            starts.append(start)
+            ends.append(end)
+            #chunk_lens.append(chunk_len)
             #mask = np.array([0] * len(x))
             #mask[start:end] = 1
             #mask_mats.append(mask)
@@ -375,7 +381,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, ys_pad, ys_mask_pad, chunk_lens
+        return xs_pad, ilens, ys_pad, ys_mask_pad, starts, ends
 
 
 def train(args):
@@ -539,7 +545,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=0,
+        batch_size=1, num_workers=4,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(

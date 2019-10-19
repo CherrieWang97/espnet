@@ -3,7 +3,7 @@ accum-grad: 4
 adim: 512
 aheads: 8
 backend: pytorch
-batch-bins: 1400000
+batch-bins: 8000000
 dlayers: 6
 dropout-rate: 0.1
 dunits: 2048
@@ -17,11 +17,11 @@ mtlalpha: 0.0
 opt: noam
 patience: 0
 sortagrad: 0
-accum-grad: 4
+accum-grad: 2
 transformer-attn-dropout-rate: 0.0
 transformer-init: pytorch
 transformer-input-layer: conv2d
 transformer-length-normalized-loss: false
-transformer-lr: 10.0
-transformer-warmup-steps: 25000
+transformer-lr: 5.0
+transformer-warmup-steps: 15000
 mask-ratio: 0.15
