@@ -164,8 +164,8 @@ class CustomUpdater(StandardUpdater):
         # Get the next batch ( a list of json files)
         batch = train_iter.next()
         self.iteration += 1
-
-        x = tuple(arr.to(self.device) if arr is not None else None for arr in batch)
+        
+        x = tuple(arr.to(self.device) if type(arr) == torch.Tensor else arr for arr in batch)
 
         # Compute the loss at this time step and accumulate it
         if self.ngpu == 0:
@@ -293,12 +293,28 @@ class MaskConverter(object):
     def mask_feats(self, feat, params):
         tag, start, end, label = params
         seq_len = label.shape[0]
-        mask_id = np.random.randint(0, seq_len)
-        label = label[mask_id]
-        start = start[mask_id]
-        end = end[mask_id]
-        feat[start:end] = feat.mean()
-        return feat, label, start, end, mask_id
+        mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
+        mask = mask & ~tag
+        mask_id = np.argwhere(mask == 1)
+        label_mask = []
+        start_id = []
+        end_id = []
+        fill_num = feat.mean()
+        chunk_len = []
+        for i in range(len(mask_id)):
+            id = mask_id[i]
+            label_mask.append(-1)
+            label_mask.append(label[id][0])
+            start_id.append(start[id][0])
+            end_id.append(end[id][0])
+            if i == 0:
+                chunk_len.append(start[id][0] // 4)
+            else:
+                chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
+            chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
+            feat[start[id][0]:end[id][0]] = fill_num
+        label_mask.append(-1)
+        return feat, label_mask, start_id, end_id, chunk_len
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -317,18 +333,17 @@ class MaskConverter(object):
         ys = list(ys)
         masked_xs = []
         masked_label = []
-        mask_ids = []
-        mask_mats = []
+        chunk_lens = []
         for i in range(len(xs)):
-            x, y, start, end, mask_id = self.mask_feats(xs[i], ys[i])
+            x, y, start, end, chunk_len = self.mask_feats(xs[i], ys[i])
             masked_xs.append(x)
             masked_label.append(y)
-            mask = np.array([0] * len(x))
-            mask[start:end] = 1
-            mask_mats.append(mask)
-            mask_ids.append(mask_id)
+            chunk_lens.append(chunk_len)
+            #mask = np.array([0] * len(x))
+            #mask[start:end] = 1
+            #mask_mats.append(mask)
+            #mask_ids.append(mask_id)
         xs = masked_xs
-        ys = masked_label
         
         # perform subsampling
         if self.subsampling_factor > 1:
@@ -339,9 +354,12 @@ class MaskConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
 
+        ys_pad = pad_list([torch.from_numpy(y[3]) for y in ys], self.ignore_id).long().to(device)
+        ys_mask_pad = pad_list([torch.tensor(y) for y in masked_label], self.ignore_id).long().to(device)
+        
         # NOTE: this is for multi-task learning (e.g., speech translation)
-        ys_pad = torch.from_numpy(np.array(ys))
-        mask = pad_list([torch.from_numpy(m).byte() for m in mask_mats], 0).to(device)
+        #ys_pad = torch.from_numpy(np.array(ys))
+        #mask = pad_list([torch.from_numpy(m).byte() for m in mask_mats], 0).to(device)
         """
         labels = ys_pad.clone()
         token_mask = torch.bernoulli(torch.full(labels.shape, self.mask_ratio)).byte()
@@ -357,7 +375,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, ys_pad, mask
+        return xs_pad, ilens, ys_pad, ys_mask_pad, chunk_lens
 
 
 def train(args):
@@ -473,7 +491,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, mask_ratio=args.mask_ratio)
 
     # read json data
     """
@@ -521,7 +539,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=10,
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(
@@ -568,6 +586,7 @@ def train(args):
     """
     att_reporter = None
     # Make a plot for training and validation values
+    """
     trainer.extend(extensions.PlotReport(['main/loss', 'validation/main/loss',
                                           'main/loss_ctc', 'validation/main/loss_ctc',
                                           'main/loss_att', 'validation/main/loss_att'],
@@ -576,13 +595,13 @@ def train(args):
                                          'epoch', file_name='acc.png'))
     trainer.extend(extensions.PlotReport(['main/cer_ctc', 'validation/main/cer_ctc'],
                                          'epoch', file_name='cer.png'))
-
+    """
     # Save best models
-    trainer.extend(snapshot_object(model, 'model.loss.best'),
-                   trigger=training.triggers.MinValueTrigger('validation/main/loss'))
-    if mtl_mode != 'ctc':
-        trainer.extend(snapshot_object(model, 'model.acc.best'),
-                       trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
+    #trainer.extend(snapshot_object(model, 'model.loss.best'),
+    #               trigger=training.triggers.MinValueTrigger('validation/main/loss'))
+    #if mtl_mode != 'ctc':
+    #    trainer.extend(snapshot_object(model, 'model.acc.best'),
+    #                   trigger=training.triggers.MaxValueTrigger('validation/main/acc'))
 
     # save snapshot which contains model and optimizer states
     trainer.extend(torch_snapshot(), trigger=(1, 'epoch'))

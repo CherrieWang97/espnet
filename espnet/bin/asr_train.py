@@ -63,6 +63,7 @@ def get_parser(parser=None, required=True):
     parser.add_argument('--report-interval-iters', default=100, type=int,
                         help="Report interval iterations")
     # task related
+    parser.add_argument('--mask-ratio', type=float, default=0.15)
     parser.add_argument('--train-json', type=str, default=None,
                         help='Filename of train label data (json)')
     parser.add_argument('--valid-json', type=str, default=None,
