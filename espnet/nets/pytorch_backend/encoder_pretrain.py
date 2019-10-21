@@ -16,6 +16,7 @@ from espnet.nets.asr_interface import ASRInterface
 from espnet.nets.pytorch_backend.ctc import CTC
 from espnet.nets.pytorch_backend.e2e_asr import CTC_LOSS_THRESHOLD
 from espnet.nets.pytorch_backend.e2e_asr import Reporter
+from espnet.nets.pytorch_backend.e2e_asr import pad_list
 from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
 from espnet.nets.pytorch_backend.nets_utils import th_accuracy
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
@@ -140,7 +141,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad, mask):
+    def forward(self, xs_pad, ilens, ys_pad, ys_pad_mask, starts, ends):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -158,14 +159,49 @@ class E2E(ASRInterface, torch.nn.Module):
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
         hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
         self.hs_pad = hs_pad
-        mask = mask[:, :max(ilens)]
-        mask = mask[:, :-2:2][:, :-2:2]
-        hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
-        hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
-        pred = self.predict(hs_pad)
-        loss = self.criterion(pred.unsqueeze(1), ys_pad.view(-1, 1))
-        acc = th_accuracy(pred.view(-1, self.odim), ys_pad.unsqueeze(1), ignore_label=-1)
+        seq_len = hs_pad.shape[1]
+        bs = hs_pad.shape[0]
+        gpu_id = hs_pad.device.index
+        loss = None
+        hs_split_list = []
+        for i in range(bs):
+            chunks = []
+            for j in range(len(starts[bs*gpu_id + i])):
+                start = starts[bs*gpu_id + i][j] // 4
+                end = ends[bs*gpu_id + i][j] // 4
+                if start == end:
+                    hs = hs_pad[i, start, :].unsqueeze(0)
+                else:
+                    hs = hs_pad[i, start:end, :]
+                chunks.append(torch.mean(hs, dim=0))
+            if len(chunks) == 0:
+                hs_split_list.append(torch.zeros([1, self.adim]).float().to(xs_pad.device))
+            else:
+                hs_split_list.append(torch.cat(chunks, dim=0).view(-1, self.adim))
+        cs_pad = pad_list(hs_split_list, 0).to(xs_pad.device)
+        """ 
+            hs_split = torch.split(hs_pad[i], chunk_split[i])
+            splits = []
+            for h in hs_split:
+                if h.size(0) == 0:
+                    splits.append(torch.zeros([self.adim]).float().to(xs_pad.device))
+                else:
+                    splits.append(torch.mean(h, dim=0))
+            hs_split_list.append(torch.cat(splits, dim=0).view(-1, self.adim))
+        hs_pad = pad_list(hs_split_list, 0).to(xs_pad.device)
+        """
+        #chunk_split = [chunk.append(seq_len - sum(chunk)) for chunk in chunk_lens]
+        #mask = mask[:, :max(ilens)]
+        #mask = mask[:, :-2:2][:, :-2:2]
+        #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
+        #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
+        pred = self.predict(cs_pad)
+        ys_pad_mask = ys_pad_mask[:, :pred.shape[1]]
+        loss = self.criterion(pred, ys_pad_mask.contiguous())
+        acc = th_accuracy(pred.view(-1, self.odim), ys_pad_mask, ignore_label=-1)
         self.reporter.report(None, None, acc, None, None, None, float(loss))
+        if math.isnan(float(loss)):
+            pdb.set_trace()
         return loss
 
         
