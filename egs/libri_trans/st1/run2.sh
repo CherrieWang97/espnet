@@ -267,20 +267,20 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         feat_trans_dir=${dumpdir}/${ttask}/delta${do_delta}
 
         # split data
-        splitjson.py --parts ${nj} ${feat_trans_dir}/data.${case}.json
+        #splitjson.py --parts ${nj} ${feat_trans_dir}/data.${case}.json
 
         recog_model=model.last5.avg.best
-        average_checkpoints.py \
-            --log \
-            --backend pytorch \
-            --snapshots ${expdir}/snapshot.ep.* \
-            --out ${expdir}/${recog_model} \
-            --num 5
+        #average_checkpoints.py \
+        #    --log \
+        #    --backend pytorch \
+        #    --snapshots ${expdir}/snapshot.ep.* \
+        #    --out ${expdir}/results/${recog_model} \
+        #    --num 5
         #### use CPU for decoding
         ngpu=1
 
-        ${decode_cmd} JOB=1:4 ${expdir}/${decode_dir}/log/decode.JOB.log \
-            CUDA_VISIBLE_DEVICES=0 st_trans.py \
+        ${decode_cmd} JOB=9:12 ${expdir}/${decode_dir}/log/decode.JOB.log \
+            CUDA_VISIBLE_DEVICES=2 st_trans.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
             --backend ${backend} \
