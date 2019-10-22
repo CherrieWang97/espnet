@@ -115,8 +115,8 @@ class E2E(ASRInterface, torch.nn.Module):
         self.acc = torch.zeros(1)
 
         # self.lsm_weight = a
-        self.criterion = LabelSmoothingLoss(self.odim, self.ignore_id, args.lsm_weight,
-                                            args.transformer_length_normalized_loss)
+        self.criterion = torch.nn.KLDivLoss(reduce=False)
+                                          
         # self.verbose = args.verbose
         self.reset_parameters(args)
         self.adim = args.adim
@@ -196,9 +196,12 @@ class E2E(ASRInterface, torch.nn.Module):
         #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
         #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
         pred = self.predict(cs_pad)
+        ys_pad_mask = ys_pad_mask.view(bs, -1, self.odim)
         ys_pad_mask = ys_pad_mask[:, :pred.shape[1]]
-        loss = self.criterion(pred, ys_pad_mask.contiguous())
-        acc = th_accuracy(pred.view(-1, self.odim), ys_pad_mask, ignore_label=-1)
+        ys_pad = ys_pad[:, :pred.shape[1]]
+        loss = self.criterion(torch.log_softmax(pred, dim=-1), ys_pad_mask)
+        loss = loss.sum() / bs
+        acc = th_accuracy(pred.view(-1, self.odim), ys_pad, ignore_label=-1)
         self.reporter.report(None, None, acc, None, None, None, float(loss))
         if math.isnan(float(loss)):
             pdb.set_trace()
