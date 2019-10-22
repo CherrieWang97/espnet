@@ -169,7 +169,9 @@ class E2E(ASRInterface, torch.nn.Module):
             for j in range(len(starts[bs*gpu_id + i])):
                 start = starts[bs*gpu_id + i][j] // 4
                 end = ends[bs*gpu_id + i][j] // 4
-                if start == end:
+                if start >= hs_pad.size(1):
+                    hs = hs_pad[i, -1, :].unsqueeze(0)
+                elif start >= end:
                     hs = hs_pad[i, start, :].unsqueeze(0)
                 else:
                     hs = hs_pad[i, start:end, :]
@@ -203,8 +205,6 @@ class E2E(ASRInterface, torch.nn.Module):
         loss = loss.sum() / bs
         acc = th_accuracy(pred.view(-1, self.odim), ys_pad, ignore_label=-1)
         self.reporter.report(None, None, acc, None, None, None, float(loss))
-        if math.isnan(float(loss)):
-            pdb.set_trace()
         return loss
 
         
