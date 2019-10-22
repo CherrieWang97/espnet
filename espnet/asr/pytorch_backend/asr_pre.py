@@ -307,6 +307,8 @@ class MaskConverter(object):
             true_dist = torch.zeros([self.odim], dtype=torch.float)
             id = mask_id[i]
             mask_label = label[id[0]]
+            if len(mask_label) == 0:
+                continue
             true_dist = true_dist.fill_(self.smoothing/(self.odim-len(mask_label)))
             true_dist[mask_label] = (1.0 - self.smoothing)/len(mask_label)
             start_id.append(int(start[id][0]))
