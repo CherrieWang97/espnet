@@ -294,6 +294,9 @@ class MaskConverter(object):
 
     def mask_feats(self, feat, params):
         start, end, label = params
+        label_seq = []
+        for lab in label:
+            label_seq.extend(list(lab))
         seq_len = len(label)
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
         mask_id = np.argwhere(mask == 1)
@@ -326,7 +329,7 @@ class MaskConverter(object):
         else:
             dist = torch.cat(seq_dist)
         #label_mask.append(-1)
-        return feat, dist, select_label, start_id, end_id
+        return feat, dist, select_label, start_id, end_id, label_seq
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -349,8 +352,10 @@ class MaskConverter(object):
         ends = []
         masked_ys = []
         #chunk_lens = []
+        ys_asr = []
         for i in range(len(xs)):
-            x, y, select_label, start, end = self.mask_feats(xs[i], ys[i])
+            x, y, select_label, start, end, y_asr = self.mask_feats(xs[i], ys[i])
+            ys_asr.append(y_asr)
             masked_xs.append(x)
             masked_ys.append(select_label)
             true_dist.append(y)
@@ -370,8 +375,7 @@ class MaskConverter(object):
         ilens = np.array([x.shape[0] for x in xs])
         ilens = torch.from_numpy(ilens).to(device)
         xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-
-        #ys_pad = pad_list([torch.from_numpy(y[3]) for y in ys], self.ignore_id).long().to(device)
+        ys_pad_asr = pad_list([torch.tensor(y) for y in ys_asr], self.ignore_id).long().to(device)
         masked_ys_pad = pad_list([torch.tensor(y) for y in masked_ys], self.ignore_id).long().to(device)
         true_dist = pad_list(true_dist, 0.0).to(device)
         
@@ -393,7 +397,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, masked_ys_pad, true_dist, starts, ends
+        return xs_pad, ilens, masked_ys_pad, true_dist, starts, ends, ys_pad_asr
 
 
 def train(args):
