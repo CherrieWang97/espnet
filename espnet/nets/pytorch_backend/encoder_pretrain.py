@@ -117,6 +117,7 @@ class E2E(ASRInterface, torch.nn.Module):
             src_attention_dropout_rate=args.transformer_attn_dropout_rate
         )
         self.predict = torch.nn.Linear(args.adim, odim)
+        self.trg_predict = torch.nn.Linear(args.adim, 4997)
         self.sos = odim - 1
         self.eos = odim - 1
         self.odim = odim
@@ -151,7 +152,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad, ys_pad_mask, starts, ends, ys_pad_asr=None):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_pad_trg, true_dist_src, true_dist_trg, starts, ends, ys_pad_asr=None):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -208,12 +209,19 @@ class E2E(ASRInterface, torch.nn.Module):
         #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
         #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
         pred = self.predict(cs_pad)
-        ys_pad_mask = ys_pad_mask.view(bs, -1, self.odim)
-        ys_pad_mask = ys_pad_mask[:, :pred.shape[1]]
-        ys_pad = ys_pad[:, :pred.shape[1]]
-        loss = self.criterion(torch.log_softmax(pred, dim=-1), ys_pad_mask)
-        loss = loss.sum() / bs
-        acc = th_accuracy(pred.view(-1, self.odim), ys_pad, ignore_label=-1)
+        pred_trg = self.trg_predict(cs_pad)
+        true_dist_src = true_dist_src.view(bs, -1, self.odim)
+        true_dist_trg = true_dist_trg.view(bs, -1, 4997)
+        true_dist_src = true_dist_src[:, :pred.shape[1]]
+        true_dist_trg = true_dist_trg[:, :pred.shape[1]]
+        ys_pad_src = ys_pad_src[:, :pred.shape[1]]
+        ys_pad_trg = ys_pad_trg[:, :pred.shape[1]]
+        loss_src = self.criterion(torch.log_softmax(pred, dim=-1), true_dist_src)
+        loss_src = loss_src.sum() / bs
+        loss_trg = self.criterion(torch.log_softmax(pred_trg, dim=-1), true_dist_trg)
+        loss_trg = loss_trg.sum() / bs
+        acc = th_accuracy(pred.view(-1, self.odim), ys_pad_src, ignore_label=-1)
+        acc_trg = th_accuracy(pred_trg.view(-1, 4997), ys_pad_trg, ignore_label=-1)
         
         # 2. forward decoder
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad_asr, self.sos, self.eos, self.ignore_id)
@@ -229,14 +237,14 @@ class E2E(ASRInterface, torch.nn.Module):
         batch_size = xs_pad.size(0)
         hs_len = hs_mask.view(batch_size, -1).sum(1)
         #loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad)
-        self.loss = loss + 0.5 * loss_att
+        self.loss = loss_src + loss_trg + loss_att
 
         # copyied from e2e_asr
-        loss_data = float(loss)
+        loss_data = float(self.loss)
         loss_ctc_data = None # float(loss_ctc)
         loss_att_data = float(loss_att)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_ctc_data, loss_att_data, acc, None, None, None, loss_data)
+            self.reporter.report(loss_ctc_data, loss_att_data, acc_trg, None, None, None, loss_data)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss

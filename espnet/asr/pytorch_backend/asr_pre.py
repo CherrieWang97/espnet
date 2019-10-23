@@ -293,43 +293,54 @@ class MaskConverter(object):
         self.smoothing = smoothing
 
     def mask_feats(self, feat, params):
-        start, end, label = params
+        start, end, label_src, label_trg = params
         label_seq = []
-        for lab in label:
+        for lab in label_src:
             label_seq.extend(list(lab))
-        seq_len = len(label)
+        seq_len = len(label_src)
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
         mask_id = np.argwhere(mask == 1)
-        seq_dist = []
+        seq_dist_src = []
+        seq_dist_trg = []
         start_id = []
         end_id = []
-        select_label = []
+        select_label_src = []
+        select_label_trg = []
         fill_num = feat.mean()
         #chunk_len = []
         for i in range(len(mask_id)):
-            true_dist = torch.zeros([self.odim], dtype=torch.float)
             id = mask_id[i]
-            mask_label = label[id[0]]
-            if len(mask_label) == 0:
+            mask_label_src = label_src[id[0]]
+            mask_label_trg = label_trg[id[0]]
+            if len(mask_label_trg) == 0:
                 continue
-            true_dist = true_dist.fill_(self.smoothing/(self.odim-len(mask_label)))
-            true_dist[mask_label] = (1.0 - self.smoothing)/len(mask_label)
+            true_dist_src = torch.zeros([self.odim], dtype=torch.float)
+            true_dist_src = true_dist_src.fill_(self.smoothing/(self.odim-len(mask_label_src)))
+            true_dist_src[mask_label_src] = (1.0 - self.smoothing)/len(mask_label_src)
+            true_dist_trg = torch.zeros([4997], dtype=torch.float)
+            true_dist_trg = true_dist_trg.fill_(self.smoothing/4997)
+            for lab in mask_label_trg:
+                true_dist_trg[lab] += (1.0 - self.smoothing) / len(mask_label_trg)
             start_id.append(int(start[id][0]))
             end_id.append(int(end[id][0]))
-            seq_dist.append(true_dist)
-            select_label.append(mask_label[0])
+            seq_dist_src.append(true_dist_src)
+            seq_dist_trg.append(true_dist_trg)
+            select_label_src.append(mask_label_src[0])
+            select_label_trg.append(mask_label_trg[0])
             #if i == 0:
             #    chunk_len.append(start[id][0] // 4)
             #else:
             #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
             #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
             feat[start[id][0]:end[id][0]] = fill_num
-        if len(seq_dist) == 0:
-            dist = torch.zeros([self.odim], dtype=torch.float)
+        if len(seq_dist_src) == 0:
+            dist_src = torch.zeros([self.odim], dtype=torch.float)
+            dist_trg = torch.zeros([4997], dtype=torch.float)
         else:
-            dist = torch.cat(seq_dist)
+            dist_src = torch.cat(seq_dist_src)
+            dist_trg = torch.cat(seq_dist_trg)
         #label_mask.append(-1)
-        return feat, dist, select_label, start_id, end_id, label_seq
+        return feat, dist_src, dist_trg, select_label_src, select_label_trg, start_id, end_id, label_seq
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -347,18 +358,22 @@ class MaskConverter(object):
         xs, ys = batch[0]
         ys = list(ys)
         masked_xs = []
-        true_dist = []
+        true_dist_src = []
+        true_dist_trg = []
         starts = []
         ends = []
-        masked_ys = []
+        masked_ys_src = []
+        masked_ys_trg = []
         #chunk_lens = []
         ys_asr = []
         for i in range(len(xs)):
-            x, y, select_label, start, end, y_asr = self.mask_feats(xs[i], ys[i])
+            x, y_src, y_trg, select_label_src, select_label_trg, start, end, y_asr = self.mask_feats(xs[i], ys[i])
             ys_asr.append(y_asr)
             masked_xs.append(x)
-            masked_ys.append(select_label)
-            true_dist.append(y)
+            masked_ys_src.append(select_label_src)
+            masked_ys_trg.append(select_label_trg)
+            true_dist_src.append(y_src)
+            true_dist_trg.append(y_trg)
             starts.append(start)
             ends.append(end)
             #chunk_lens.append(chunk_len)
@@ -376,8 +391,10 @@ class MaskConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
         ys_pad_asr = pad_list([torch.tensor(y) for y in ys_asr], self.ignore_id).long().to(device)
-        masked_ys_pad = pad_list([torch.tensor(y) for y in masked_ys], self.ignore_id).long().to(device)
-        true_dist = pad_list(true_dist, 0.0).to(device)
+        masked_pad_src = pad_list([torch.tensor(y) for y in masked_ys_src], self.ignore_id).long().to(device)
+        masked_pad_trg = pad_list([torch.tensor(y) for y in masked_ys_trg], self.ignore_id).long().to(device)
+        true_dist_src = pad_list(true_dist_src, 0.0).to(device)
+        true_dist_trg = pad_list(true_dist_trg, 0.0).to(device)
         
         # NOTE: this is for multi-task learning (e.g., speech translation)
         #ys_pad = torch.from_numpy(np.array(ys))
@@ -397,7 +414,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, masked_ys_pad, true_dist, starts, ends, ys_pad_asr
+        return xs_pad, ilens, masked_pad_src, masked_pad_trg,  true_dist_src, true_dist_trg, starts, ends, ys_pad_asr
 
 
 def train(args):
