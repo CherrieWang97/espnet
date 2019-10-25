@@ -141,7 +141,7 @@ class CustomUpdater(StandardUpdater):
     """
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
+                 optimizer, scheduler,  device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
         super(CustomUpdater, self).__init__(train_iter, optimizer)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
@@ -152,6 +152,7 @@ class CustomUpdater(StandardUpdater):
         self.grad_noise = grad_noise
         self.iteration = 0
         self.use_apex = use_apex
+        self.scheduler = scheduler
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
@@ -200,6 +201,8 @@ class CustomUpdater(StandardUpdater):
             logging.warning('grad norm is nan. Do not update model.')
         else:
             optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
         optimizer.zero_grad()
 
     def update(self):
@@ -291,12 +294,9 @@ class MaskConverter(object):
         self.mask_ratio = mask_ratio
 
     def mask_feats(self, feat, params):
-        tag, start, end, label = params
+        start, end, label = params
         seq_len = label.shape[0]
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
-        tag_mask = np.random.binomial(1, 0.5, size=seq_len)
-        tag = tag & tag_mask
-        mask = mask & ~tag
         mask_id = np.argwhere(mask == 1)
         label_mask = []
         start_id = []
@@ -305,18 +305,9 @@ class MaskConverter(object):
         #chunk_len = []
         for i in range(len(mask_id)):
             id = mask_id[i]
-            #label_mask.append(-1)
-            label_mask.append(label[id][0])
-            start_id.append(int(start[id][0]))
-            end_id.append(int(end[id][0]))
-            #if i == 0:
-            #    chunk_len.append(start[id][0] // 4)
-            #else:
-            #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
-            #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
             feat[start[id][0]:end[id][0]] = fill_num
         #label_mask.append(-1)
-        return feat, label_mask, start_id, end_id
+        return feat
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -334,21 +325,9 @@ class MaskConverter(object):
         xs, ys = batch[0]
         ys = list(ys)
         masked_xs = []
-        masked_label = []
-        starts = []
-        ends = []
-        #chunk_lens = []
         for i in range(len(xs)):
-            x, y, start, end = self.mask_feats(xs[i], ys[i])
+            x = self.mask_feats(xs[i], ys[i])
             masked_xs.append(x)
-            masked_label.append(y)
-            starts.append(start)
-            ends.append(end)
-            #chunk_lens.append(chunk_len)
-            #mask = np.array([0] * len(x))
-            #mask[start:end] = 1
-            #mask_mats.append(mask)
-            #mask_ids.append(mask_id)
         xs = masked_xs
         
         # perform subsampling
@@ -360,8 +339,7 @@ class MaskConverter(object):
         ilens = torch.from_numpy(ilens).to(device)
         xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
 
-        ys_pad = pad_list([torch.from_numpy(y[3]) for y in ys], self.ignore_id).long().to(device)
-        ys_mask_pad = pad_list([torch.tensor(y) for y in masked_label], self.ignore_id).long().to(device)
+        ys_pad = pad_list([torch.from_numpy(y[2]) for y in ys], self.ignore_id).long().to(device)
         
         # NOTE: this is for multi-task learning (e.g., speech translation)
         #ys_pad = torch.from_numpy(np.array(ys))
@@ -381,7 +359,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, ys_pad, ys_mask_pad, starts, ends
+        return xs_pad, ilens, ys_pad
 
 
 def train(args):
@@ -463,6 +441,7 @@ def train(args):
     model = model.to(device=device, dtype=dtype)
 
     # Setup an optimizer
+    scheduler = None
     if args.opt == 'adadelta':
         optimizer = torch.optim.Adadelta(
             model.parameters(), rho=0.95, eps=args.eps,
@@ -473,6 +452,14 @@ def train(args):
     elif args.opt == 'noam':
         from espnet.nets.pytorch_backend.transformer.optimizer import get_std_opt
         optimizer = get_std_opt(model, args.adim, args.transformer_warmup_steps, args.transformer_lr)
+    elif args.opt == "adamW":
+        from espnet.nets.pytorch_backend.transformer.optimizer import AdamW
+        no_decay = ['bias', 'norm1.weight', 'norm2.weight', 'embed_norm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.transformer_lr, eps=1e-8)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
 
@@ -497,7 +484,8 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
     with open(args.train_json, 'rb') as f:
@@ -524,6 +512,10 @@ def train(args):
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
     logging.warning('train data size: {}'.format(len(train)))
+    if args.opt == 'adamW':
+        steps = args.epochs * len(train)
+        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=steps)
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
@@ -542,12 +534,12 @@ def train(args):
         batch_size=1, num_workers=4,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     valid_iter = {'main': ChainerDataLoader(
-        dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
+        dataset=TransformDataset(valid, lambda data: valid_converter([load_cv(data)])),
         batch_size=1, shuffle=False, collate_fn=lambda x: x[0],
         num_workers=10)}
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer,
+        model, args.grad_clip, train_iter, optimizer, scheduler,
         device, args.ngpu, args.grad_noise, args.accum_grad, use_apex=use_apex)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
@@ -636,11 +628,10 @@ def train(args):
             'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
             trigger=(args.report_interval_iters, 'iteration'))
         report_keys.append('eps')
-    if args.opt == 'noam':
-        trainer.extend(extensions.observe_value(
-            'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
-            trigger=(args.report_interval_iters, 'iteration'))
-        report_keys.append('lr')
+    trainer.extend(extensions.observe_value(
+        'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
+        trigger=(args.report_interval_iters, 'iteration'))
+    report_keys.append('lr')
     if args.report_cer:
         report_keys.append('validation/main/cer')
     if args.report_wer:
