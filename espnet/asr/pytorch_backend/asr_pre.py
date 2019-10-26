@@ -293,7 +293,7 @@ class MaskConverter(object):
         self.smoothing = smoothing
 
     def mask_feats(self, feat, params):
-        start, end, label_src, label_trg = params
+        start, end, label_trg, label_src = params
         label_seq = []
         for lab in label_src:
             label_seq.extend(list(lab))
@@ -578,7 +578,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=0,
+        batch_size=1, num_workers=10,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(
