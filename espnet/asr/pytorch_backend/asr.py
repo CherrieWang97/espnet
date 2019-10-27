@@ -484,7 +484,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data

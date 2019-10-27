@@ -154,9 +154,9 @@ class LoadInputsAndTargets(object):
                     if 'tokenid' in inp:
                         # ======= Legacy format for output =======
                         # {"output": [{"tokenid": "1 2 3 4"}])
-                        #x = np.fromiter(map(int, inp['tokenid'].split()),
-                        #            dtype=np.int64)
-                        x = list(map(np.array, inp['tokenid']))
+                        x = np.fromiter(map(int, inp['tokenid'].split()),
+                                    dtype=np.int64)
+                        #x = list(map(np.array, inp['tokenid']))
                     else:
                         # ======= New format =======
                         # {"input":
@@ -184,8 +184,8 @@ class LoadInputsAndTargets(object):
                         end = np.fromiter(map(int, inp['end'].split()),
                                           dtype=np.int64)
                         y_feats_dict.setdefault('end', []).append(end)
-                    y_feats_dict.setdefault("srcid", []).append(x)
-                    y_feats_dict.setdefault("trgid", []).append(x2)
+                    y_feats_dict.setdefault(inp['name'], []).append(x)
+                    #y_feats_dict.setdefault("trgid", []).append(x2)
                    
 
         if self.mode == 'asr':
