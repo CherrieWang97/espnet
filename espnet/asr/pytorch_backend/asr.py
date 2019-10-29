@@ -286,7 +286,7 @@ class MaskConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, mask_ratio=0.15):
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, mask_ratio=0.1):
         """Construct a MaskConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
@@ -484,7 +484,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
@@ -507,7 +507,7 @@ def train(args):
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           count=args.batch_count,
-                          batch_bins=args.batch_bins,
+                          batch_bins=args.batch_bins // 4,
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
