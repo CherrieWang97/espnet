@@ -185,12 +185,25 @@ class E2E(ASRInterface, torch.nn.Module):
         else:
             self.error_calculator = None
         self.rnnlm = None
-        #if args.tie_trg_weight:
-        #    self.trg_predict.weight = self.mt_decoder.embed[0].weight
+        if args.tie_trg_weight:
+            self.trg_predict.weight = self.mt_decoder.embed[0].weight
         if args.tie_src_weight:
             self.predict.weight = self.decoder.embed[0].weight
         if args.tie_src_ctc_weight:
             self.predict.weight = self.ctc.ctc_lo.weight
+        if asr_model is not None:
+            param_dict = dict(self.named_parameters())
+            for k, v in asr_model.items():
+                if k in param_dict:
+                    param_dict[k].data = v.data
+        if mt_model is not None:
+            param_dict = dict(self.named_parameters())
+            for k, v in mt_model.items():
+                nk = k.replace('encoder.', 'mt_encoder.')
+                nk = nk.replace('decoder.', 'mt_decoder.')
+                if nk in param_dict:
+                    param_dict[nk].data = v.data
+
 
     def reset_parameters(self, args):
         # initialize parameters

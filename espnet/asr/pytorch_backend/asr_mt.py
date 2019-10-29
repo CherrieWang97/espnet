@@ -34,7 +34,7 @@ from espnet.asr.asr_utils import snapshot_object
 from espnet.asr.asr_utils import torch_load
 from espnet.asr.asr_utils import torch_resume
 from espnet.asr.asr_utils import torch_snapshot
-from espnet.asr.pytorch_backend.asr_init import load_trained_model
+from espnet.asr.pytorch_backend.asr_init import get_trained_model_state_dict
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
 from espnet.mt.pytorch_backend.mt import CustomConverter as MTConverter
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
@@ -460,12 +460,20 @@ def train(args):
     else:
         mtl_mode = 'mtl'
         logging.info('Multitask learning mode')
+  
+    asr_model = None
+    mt_model = None
 
-    if args.enc_init is not None or args.dec_init is not None:
-        model = load_trained_modules(idim, odim, args)
-    else:
-        model_class = dynamic_import(args.model_module)
-        model = model_class(idim, odim, args)
+    if args.enc_init is not None:
+        asr_model, _ = get_trained_model_state_dict(args.enc_init)
+
+    if args.dec_init is not None:
+        mt_model, _ = get_trained_model_state_dict(args.dec_init)
+
+    model_class = dynamic_import(args.model_module)
+    model = model_class(idim, odim, args, asr_model=asr_model,  mt_model=mt_model)
+    del mt_model
+    del asr_model
     assert isinstance(model, ASRInterface)
 
     subsampling_factor = model.subsample[0]
