@@ -154,9 +154,11 @@ class LoadInputsAndTargets(object):
                     if 'tokenid' in inp:
                         # ======= Legacy format for output =======
                         # {"output": [{"tokenid": "1 2 3 4"}])
-                        x = np.fromiter(map(int, inp['tokenid'].split()),
-                                    dtype=np.int64)
-                        #x = list(map(np.array, inp['tokenid']))
+                        if type(inp['tokenid']) == str:
+                            x = np.fromiter(map(int, inp['tokenid'].split()),
+                                        dtype=np.int64)
+                        else:
+                            x = list(map(np.array, inp['tokenid']))
                     else:
                         # ======= New format =======
                         # {"input":
@@ -166,8 +168,6 @@ class LoadInputsAndTargets(object):
                         x = self._get_from_loader(
                             filepath=inp['feat'],
                             filetype=inp.get('filetype', 'mat'))
-                    if 'tokenid2' in inp:
-                        x2 = list(map(np.array, inp['tokenid2']))
                     if 'transcript' in inp and self.mode == "tp":
                         tp = inp['transcript']
                         tp_list.append(tp)
@@ -184,8 +184,10 @@ class LoadInputsAndTargets(object):
                         end = np.fromiter(map(int, inp['end'].split()),
                                           dtype=np.int64)
                         y_feats_dict.setdefault('end', []).append(end)
-                    y_feats_dict.setdefault("srcid", []).append(x)
-                    #y_feats_dict.setdefault("trgid", []).append(x2)
+                    y_feats_dict.setdefault(inp['name'], []).append(x)
+                    if 'tokenid2' in inp:
+                        x2 = list(map(np.array, inp['tokenid2']))
+                        y_feats_dict.setdefault("trgid", []).append(x2)
                    
 
         if self.mode == 'asr':
