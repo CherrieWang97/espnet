@@ -188,6 +188,7 @@ class LoadInputsAndTargets(object):
                     if 'tokenid2' in inp:
                         x2 = list(map(np.array, inp['tokenid2']))
                         y_feats_dict.setdefault("trgid", []).append(x2)
+                    #y_feats_dict.setdefault("trgid", []).append(x2)
                    
 
         if self.mode == 'asr':
