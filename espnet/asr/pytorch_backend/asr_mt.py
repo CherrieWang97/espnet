@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import sys
+import random
 import pdb
 
 from chainer import reporter as reporter_module
@@ -33,9 +34,9 @@ from espnet.asr.asr_utils import snapshot_object
 from espnet.asr.asr_utils import torch_load
 from espnet.asr.asr_utils import torch_resume
 from espnet.asr.asr_utils import torch_snapshot
-from espnet.asr.pytorch_backend.asr_init import load_trained_model
+from espnet.asr.pytorch_backend.asr_init import get_trained_model_state_dict
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
-from espnet.asr.pytorch_backend.asr_pre import MaskASRConverter
+from espnet.mt.pytorch_backend.mt import CustomConverter as MTConverter
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
 from espnet.nets.asr_interface import ASRInterface
 from espnet.nets.pytorch_backend.e2e_asr import pad_list
@@ -142,7 +143,7 @@ class CustomUpdater(StandardUpdater):
     """
 
     def __init__(self, model, grad_clip_threshold, train_iter,
-                 optimizer, scheduler,  device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
+                 optimizer, device, ngpu, grad_noise=False, accum_grad=1, use_apex=False):
         super(CustomUpdater, self).__init__(train_iter, optimizer)
         self.model = model
         self.grad_clip_threshold = grad_clip_threshold
@@ -153,21 +154,29 @@ class CustomUpdater(StandardUpdater):
         self.grad_noise = grad_noise
         self.iteration = 0
         self.use_apex = use_apex
-        self.scheduler = scheduler
 
     # The core part of the update routine can be customized by overriding.
     def update_core(self):
         """Main update routine of the CustomUpdater."""
         # When we pass one iterator and optimizer to StandardUpdater.__init__,
         # they are automatically named 'main'.
-        train_iter = self.get_iterator('main')
+        if random.random() < 0.5:
+            task = "asr"
+            train_iter = self.get_iterator('main')
+        else:
+            task = "mt"
+            train_iter = self.get_iterator('mt')
+
         optimizer = self.get_optimizer('main')
 
         # Get the next batch ( a list of json files)
         batch = train_iter.next()
         self.iteration += 1
-        
-        x = tuple(arr.to(self.device) if type(arr) == torch.Tensor else arr for arr in batch)
+        batch = [arr.to(self.device) if type(arr) == torch.Tensor else arr for arr in batch]
+        if task == "mt":
+            batch.extend([None] * 6)
+        batch.append(task)
+        x = tuple(batch) 
 
         # Compute the loss at this time step and accumulate it
         if self.ngpu == 0:
@@ -202,8 +211,6 @@ class CustomUpdater(StandardUpdater):
             logging.warning('grad norm is nan. Do not update model.')
         else:
             optimizer.step()
-            if self.scheduler is not None:
-                self.scheduler.step()
         optimizer.zero_grad()
 
     def update(self):
@@ -287,28 +294,64 @@ class MaskConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, mask_ratio=0.1):
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, odim=5000, mask_ratio=0.15, smoothing=0.1):
         """Construct a MaskConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
         self.dtype = dtype
         self.mask_ratio = mask_ratio
+        self.odim = odim
+        self.smoothing = smoothing
 
     def mask_feats(self, feat, params):
-        start, end, label = params
-        seq_len = label.shape[0]
+        start, end, label_trg, label_src = params
+        label_seq = []
+        for lab in label_src:
+            label_seq.extend(list(lab))
+        seq_len = len(label_src)
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
         mask_id = np.argwhere(mask == 1)
-        label_mask = []
+        seq_dist_src = []
+        seq_dist_trg = []
         start_id = []
         end_id = []
+        select_label_src = []
+        select_label_trg = []
         fill_num = feat.mean()
         #chunk_len = []
         for i in range(len(mask_id)):
             id = mask_id[i]
+            mask_label_src = label_src[id[0]]
+            mask_label_trg = label_trg[id[0]]
+            if len(mask_label_trg) == 0:
+                continue
+            true_dist_src = torch.zeros([self.odim], dtype=torch.float)
+            true_dist_src = true_dist_src.fill_(self.smoothing/(self.odim-len(mask_label_src)))
+            true_dist_src[mask_label_src] = (1.0 - self.smoothing)/len(mask_label_src)
+            true_dist_trg = torch.zeros([4997], dtype=torch.float)
+            true_dist_trg = true_dist_trg.fill_(self.smoothing/4997)
+            for lab in mask_label_trg:
+                true_dist_trg[lab] += (1.0 - self.smoothing) / len(mask_label_trg)
+            start_id.append(int(start[id][0]))
+            end_id.append(int(end[id][0]))
+            seq_dist_src.append(true_dist_src)
+            seq_dist_trg.append(true_dist_trg)
+            select_label_src.append(mask_label_src[0])
+            select_label_trg.append(mask_label_trg[0])
+            #if i == 0:
+            #    chunk_len.append(start[id][0] // 4)
+            #else:
+            #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
+            #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
             feat[start[id][0]:end[id][0]] = fill_num
+        if len(seq_dist_src) == 0:
+            dist_src = torch.zeros([self.odim], dtype=torch.float)
+            dist_trg = torch.zeros([4997], dtype=torch.float)
+        else:
+            dist_src = torch.cat(seq_dist_src)
+            dist_trg = torch.cat(seq_dist_trg)
         #label_mask.append(-1)
-        return feat
+        return feat, dist_src, dist_trg, select_label_src, select_label_trg, start_id, end_id, label_seq
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -326,11 +369,30 @@ class MaskConverter(object):
         xs, ys = batch[0]
         ys = list(ys)
         masked_xs = []
+        true_dist_src = []
+        true_dist_trg = []
+        starts = []
+        ends = []
+        masked_ys_src = []
+        masked_ys_trg = []
+        #chunk_lens = []
+        ys_asr = []
         for i in range(len(xs)):
-            x = self.mask_feats(xs[i], ys[i])
+            x, y_src, y_trg, select_label_src, select_label_trg, start, end, y_asr = self.mask_feats(xs[i], ys[i])
+            ys_asr.append(y_asr)
             masked_xs.append(x)
+            masked_ys_src.append(select_label_src)
+            masked_ys_trg.append(select_label_trg)
+            true_dist_src.append(y_src)
+            true_dist_trg.append(y_trg)
+            starts.append(start)
+            ends.append(end)
+            #chunk_lens.append(chunk_len)
+            #mask = np.array([0] * len(x))
+            #mask[start:end] = 1
+            #mask_mats.append(mask)
+            #mask_ids.append(mask_id)
         xs = masked_xs
-        
         # perform subsampling
         if self.subsampling_factor > 1:
             xs = [x[::self.subsampling_factor, :] for x in xs]
@@ -339,8 +401,11 @@ class MaskConverter(object):
         ilens = np.array([x.shape[0] for x in xs])
         ilens = torch.from_numpy(ilens).to(device)
         xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-
-        ys_pad = pad_list([torch.from_numpy(y[2]) for y in ys], self.ignore_id).long().to(device)
+        ys_pad_asr = pad_list([torch.tensor(y) for y in ys_asr], self.ignore_id).long().to(device)
+        masked_pad_src = pad_list([torch.tensor(y) for y in masked_ys_src], self.ignore_id).long().to(device)
+        masked_pad_trg = pad_list([torch.tensor(y) for y in masked_ys_trg], self.ignore_id).long().to(device)
+        true_dist_src = pad_list(true_dist_src, 0.0).to(device)
+        true_dist_trg = pad_list(true_dist_trg, 0.0).to(device)
         
         # NOTE: this is for multi-task learning (e.g., speech translation)
         #ys_pad = torch.from_numpy(np.array(ys))
@@ -360,7 +425,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, ys_pad
+        return xs_pad, ilens, masked_pad_src, masked_pad_trg,  true_dist_src, true_dist_trg, starts, ends, ys_pad_asr
 
 
 def train(args):
@@ -395,12 +460,20 @@ def train(args):
     else:
         mtl_mode = 'mtl'
         logging.info('Multitask learning mode')
+  
+    asr_model = None
+    mt_model = None
 
-    if args.enc_init is not None or args.dec_init is not None:
-        model = load_trained_modules(idim, odim, args)
-    else:
-        model_class = dynamic_import(args.model_module)
-        model = model_class(idim, odim, args)
+    if args.enc_init is not None:
+        asr_model, _ = get_trained_model_state_dict(args.enc_init)
+
+    if args.dec_init is not None:
+        mt_model, _ = get_trained_model_state_dict(args.dec_init)
+
+    model_class = dynamic_import(args.model_module)
+    model = model_class(idim, odim, args, asr_model=asr_model,  mt_model=mt_model)
+    del mt_model
+    del asr_model
     assert isinstance(model, ASRInterface)
 
     subsampling_factor = model.subsample[0]
@@ -442,7 +515,6 @@ def train(args):
     model = model.to(device=device, dtype=dtype)
 
     # Setup an optimizer
-    scheduler = None
     if args.opt == 'adadelta':
         optimizer = torch.optim.Adadelta(
             model.parameters(), rho=0.95, eps=args.eps,
@@ -453,14 +525,6 @@ def train(args):
     elif args.opt == 'noam':
         from espnet.nets.pytorch_backend.transformer.optimizer import get_std_opt
         optimizer = get_std_opt(model, args.adim, args.transformer_warmup_steps, args.transformer_lr)
-    elif args.opt == "adamW":
-        from espnet.nets.pytorch_backend.transformer.optimizer import AdamW
-        no_decay = ['bias', 'norm1.weight', 'norm2.weight', 'embed_norm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=args.transformer_lr, eps=1e-8)
     else:
         raise NotImplementedError("unknown optimizer: " + args.opt)
 
@@ -485,14 +549,16 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskASRConverter(subsampling_factor=subsampling_factor, dtype=dtype)
-    valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
+    mt_converter = MTConverter()
 
     # read json data
-    with open(args.train_json, 'rb') as f:
-        train_json = json.load(f)['utts']
+    with open(args.mt_train_json, 'rb') as f:
+        mt_train_json = json.load(f)['utts']
+    """
     with open(args.valid_json, 'rb') as f:
         valid_json = json.load(f)['utts']
+    """
     use_sortagrad = args.sortagrad == -1 or args.sortagrad > 0
     # make minibatch list (variable length)
     train = make_batchset(train_json, args.batch_size,
@@ -504,27 +570,38 @@ def train(args):
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    mt_train = make_batchset(mt_train_json, args.batch_size,
+                          args.maxlen_in, args.maxlen_out, args.minibatches,
+                          min_batch_size=args.ngpu if args.ngpu > 1 else 1,
+                          shortest_first=use_sortagrad,
+                          count=args.batch_count,
+                          batch_bins=args.batch_bins,
+                          batch_frames_in=args.batch_frames_in,
+                          batch_frames_out=args.batch_frames_out,
+                          batch_frames_inout=args.batch_frames_inout,
+                          mt=True)
+    """
     valid = make_batchset(valid_json, args.batch_size,
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           count=args.batch_count,
-                          batch_bins=args.batch_bins // 4,
+                          batch_bins=args.batch_bins,
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
+    """
     logging.warning('train data size: {}'.format(len(train)))
-    if args.opt == 'adamW':
-        steps = args.epochs * len(train)
-        from espnet.nets.pytorch_backend.transformer.optimizer import WarmupLinearSchedule
-        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.transformer_warmup_steps, t_total=steps)
     load_tr = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': True}  # Switch the mode of preprocessing
     )
+    load_mt = LoadInputsAndTargets(mode='mt', load_output=True)
+    """
     load_cv = LoadInputsAndTargets(
         mode='asr', load_output=True, preprocess_conf=args.preprocess_conf,
         preprocess_args={'train': False}  # Switch the mode of preprocessing
     )
+    """
     # hack to make batchsize argument as 1
     # actual bathsize is included in a list
     # default collate function converts numpy array to pytorch tensor
@@ -532,15 +609,21 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=10,
+        batch_size=1, num_workers=0,
+        shuffle=not use_sortagrad, collate_fn=lambda x: x[0]),
+        'mt': ChainerDataLoader(
+        dataset=TransformDataset(mt_train, lambda data: mt_converter([load_mt(data)])),
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
+    """
     valid_iter = {'main': ChainerDataLoader(
-        dataset=TransformDataset(valid, lambda data: valid_converter([load_cv(data)])),
+        dataset=TransformDataset(valid, lambda data: converter([load_cv(data)])),
         batch_size=1, shuffle=False, collate_fn=lambda x: x[0],
         num_workers=10)}
+    """
     # Set up a trainer
     updater = CustomUpdater(
-        model, args.grad_clip, train_iter, optimizer, scheduler,
+        model, args.grad_clip, train_iter, optimizer,
         device, args.ngpu, args.grad_noise, args.accum_grad, use_apex=use_apex)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
@@ -555,7 +638,7 @@ def train(args):
         torch_resume(args.resume, trainer)
 
     # Evaluate the model with the test dataset for each epoch
-    trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
+    #trainer.extend(CustomEvaluator(model, valid_iter, reporter, device, args.ngpu))
 
     # Save attention weight each epoch
     """
@@ -620,19 +703,18 @@ def train(args):
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
-    report_keys = ['epoch', 'iteration', 'main/loss', 'main/loss_ctc', 'main/loss_att',
-                   'validation/main/loss', 'validation/main/loss_ctc', 'validation/main/loss_att',
-                   'main/acc', 'validation/main/acc', 'main/cer_ctc', 'validation/main/cer_ctc',
-                   'elapsed_time']
+    report_keys = ['epoch', 'iteration', 'main/loss', 'main/acc_asr', 'main/acc_src',
+                   'main/acc_trg', 'main/acc_mt', 'elapsed_time']
     if args.opt == 'adadelta':
         trainer.extend(extensions.observe_value(
             'eps', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["eps"]),
             trigger=(args.report_interval_iters, 'iteration'))
         report_keys.append('eps')
-    trainer.extend(extensions.observe_value(
-        'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
-        trigger=(args.report_interval_iters, 'iteration'))
-    report_keys.append('lr')
+    if args.opt == 'noam':
+        trainer.extend(extensions.observe_value(
+            'lr', lambda trainer: trainer.updater.get_optimizer('main').param_groups[0]["lr"]),
+            trigger=(args.report_interval_iters, 'iteration'))
+        report_keys.append('lr')
     if args.report_cer:
         report_keys.append('validation/main/cer')
     if args.report_wer:
