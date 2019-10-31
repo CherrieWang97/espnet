@@ -35,6 +35,7 @@ from espnet.asr.asr_utils import torch_resume
 from espnet.asr.asr_utils import torch_snapshot
 from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
+from espnet.asr.pytorch_backend.asr_pre import MaskASRConverter
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
 from espnet.nets.asr_interface import ASRInterface
 from espnet.nets.pytorch_backend.e2e_asr import pad_list
@@ -484,7 +485,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskASRConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
@@ -507,7 +508,7 @@ def train(args):
                           args.maxlen_in, args.maxlen_out, args.minibatches,
                           min_batch_size=args.ngpu if args.ngpu > 1 else 1,
                           count=args.batch_count,
-                          batch_bins=args.batch_bins,
+                          batch_bins=args.batch_bins // 4,
                           batch_frames_in=args.batch_frames_in,
                           batch_frames_out=args.batch_frames_out,
                           batch_frames_inout=args.batch_frames_inout)
@@ -531,7 +532,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=4,
+        batch_size=1, num_workers=10,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     valid_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(valid, lambda data: valid_converter([load_cv(data)])),

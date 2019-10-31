@@ -274,6 +274,75 @@ class CustomConverter(object):
         
         return xs_pad, ilens, ys_pad
 
+class MaskASRConverter(object):
+    """Custom batch converter for Pytorch.
+
+    Args:
+        subsampling_factor (int): The subsampling factor.
+        dtype (torch.dtype): Data type to convert.
+
+    """
+
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, odim=5000, mask_ratio=0.15, smoothing=0.1):
+        """Construct a MaskConverter object."""
+        self.subsampling_factor = subsampling_factor
+        self.ignore_id = -1
+        self.dtype = dtype
+        self.mask_ratio = mask_ratio
+        self.odim = odim
+        self.smoothing = smoothing
+
+    def mask_feats(self, feat, params):
+        start, end, label_src = params
+        seq_len = len(label_src)
+        mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
+        mask_id = np.argwhere(mask == 1)
+        fill_num = feat.mean()
+        for id in mask_id:
+            feat[start[id[0]]:end[id[0]]] = fill_num
+        return feat, label_src
+
+    def __call__(self, batch, device=torch.device('cpu')):
+        """Transform a batch and send it to a device.
+
+        Args:
+            batch (list): The batch to transform.
+            device (torch.device): The device to send to.
+
+        Returns:
+            tuple(torch.Tensor, torch.Tensor, torch.Tensor)
+
+        """
+        # batch should be located in list
+        assert len(batch) == 1
+        xs, ys = batch[0]
+        ys = list(ys)
+        masked_xs = []
+        true_dist_src = []
+        true_dist_trg = []
+        starts = []
+        ends = []
+        masked_ys_src = []
+        masked_ys_trg = []
+        #chunk_lens = []
+        ys_asr = []
+        for i in range(len(xs)):
+            x, y_asr = self.mask_feats(xs[i], ys[i])
+            masked_xs.append(x)
+            ys_asr.append(y_asr)
+        xs = masked_xs
+        # perform subsampling
+        if self.subsampling_factor > 1:
+            xs = [x[::self.subsampling_factor, :] for x in xs]
+
+        # get batch of lengths of input sequences
+        ilens = np.array([x.shape[0] for x in xs])
+        ilens = torch.from_numpy(ilens).to(device)
+        xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
+        ys_pad_asr = pad_list([torch.tensor(y) for y in ys_asr], self.ignore_id).long().to(device)
+        return xs_pad, ilens, ys_pad_asr
+
+
 class MaskConverter(object):
     """Custom batch converter for Pytorch.
 
@@ -530,7 +599,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
+    converter = MaskASRConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
 
     # read json data
     """
@@ -578,7 +647,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=10,
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(

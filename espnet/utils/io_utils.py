@@ -177,12 +177,10 @@ class LoadInputsAndTargets(object):
                     #                      dtype=np.int64)
                     #    y_feats_dict.setdefault('tag', []).append(tag)
                     if 'start' in inp:
-                        start = np.fromiter(map(int, inp['start'].split()),
-                                          dtype=np.int64)
+                        start = list(map(int, inp['start'].split()))
                         y_feats_dict.setdefault('start', []).append(start)
                     if 'end' in inp:
-                        end = np.fromiter(map(int, inp['end'].split()),
-                                          dtype=np.int64)
+                        end = list(map(int, inp['end'].split()))
                         y_feats_dict.setdefault('end', []).append(end)
                     y_feats_dict.setdefault(inp['name'], []).append(x)
                     #y_feats_dict.setdefault("trgid", []).append(x2)
