@@ -206,6 +206,27 @@ def _restore_snapshot(model, snapshot, load_fn=chainer.serializers.load_npz):
     load_fn(snapshot, model)
     logging.info('restored from ' + str(snapshot))
 
+def noam_factor_decay(factor_decay=0.5):
+    """Extension to perform adadelta eps decay.
+
+    Args:
+        eps_decay (float): Decay rate of eps.
+
+    Returns:
+        An extension function.
+
+    """
+    @training.make_extension(trigger=(1, 'epoch'))
+    def adadelta_eps_decay(trainer):
+        _noam_factor_decay(trainer, eps_decay)
+
+    return noam_factor_decay
+
+
+def _noam_factor_decay(trainer, factor_decay):
+    optimizer = trainer.updater.get_optimizer('main')
+    optimizer.factor *= factor_decay
+    logging.warning('optimizer learning rate decayed to ' + str(optimizer.factor))
 
 def adadelta_eps_decay(eps_decay):
     """Extension to perform adadelta eps decay.
