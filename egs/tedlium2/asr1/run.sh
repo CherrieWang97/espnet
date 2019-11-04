@@ -34,8 +34,8 @@ recog_model=model.acc.best # set a model to be used for decoding: 'model.acc.bes
 n_average=10
 
 # bpemode (unigram or bpe)
-nbpe=500
-bpemode=unigram
+nbpe=1000
+bpemode=bpe
 
 # exp tag
 tag="" # tag for managing experiments.
@@ -50,7 +50,7 @@ set -o pipefail
 
 train_set=train_trim_sp
 train_dev=dev_trim
-recog_set="dev test"
+recog_set="test"
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
     echo "stage -1: Data Download"
@@ -112,8 +112,8 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
 fi
 
-dict=data/lang_char/${train_set}_${bpemode}${nbpe}_units.txt
-bpemodel=data/lang_char/${train_set}_${bpemode}${nbpe}
+dict=data/lang_1spm/train_bpe1000_units_lc.rm.txt
+bpemodel=data/lang_1spm/train_bpe1000.model
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
@@ -150,6 +150,7 @@ if [ -z ${tag} ]; then
 else
     expname=${train_set}_${backend}_${tag}
 fi
+expname=mask_asr
 expdir=exp/${expname}
 mkdir -p ${expdir}
 
@@ -221,11 +222,11 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}
 
         # split data
-        splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.json
+        splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.lc.rm.json
 
         #### use CPU for decoding
-        ngpu=0
-        ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
+        ngpu=1
+        ${decode_cmd} JOB=1:4 ${expdir}/${decode_dir}/log/decode.JOB.log \
             asr_recog.py \
             --config ${decode_config} \
             --ngpu ${ngpu} \
@@ -234,8 +235,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --verbose ${verbose} \
             --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
-            --model ${expdir}/results/${recog_model}  \
-            --rnnlm ${lmexpdir}/rnnlm.model.best
+            --model ${expdir}/results/${recog_model}  
 
         score_sclite.sh --bpe ${nbpe} --bpemodel ${bpemodel}.model --wer true ${expdir}/${decode_dir} ${dict}
 

@@ -24,6 +24,7 @@ import torch
 from torch.nn.parallel import data_parallel
 
 from espnet.asr.asr_utils import adadelta_eps_decay
+from espnet.asr.asr_utils import noam_factor_decay
 from espnet.asr.asr_utils import add_results_to_json
 from espnet.asr.asr_utils import CompareValueTrigger
 from espnet.asr.asr_utils import get_model_conf
@@ -534,6 +535,11 @@ def train(args):
                            trigger=CompareValueTrigger(
                                'validation/main/loss',
                                lambda best_value, current_value: best_value < current_value))
+    if args.opt == 'noam':
+        trainer.extend(noam_factor_decay(0.5),
+                           trigger=CompareValueTrigger(
+                               'validation/main/acc',
+                               lambda best_value, current_value: best_value > current_value))
 
     # Write a log of evaluation statistics for each epoch
     trainer.extend(extensions.LogReport(trigger=(args.report_interval_iters, 'iteration')))
