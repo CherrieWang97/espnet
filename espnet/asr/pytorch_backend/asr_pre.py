@@ -432,7 +432,7 @@ class MaskConverter(object):
         self.smoothing = smoothing
 
     def mask_feats(self, feat, params):
-        start, end, label_trg, label_src = params
+        start, end, label_src, label_trg = params
         label_seq = []
         for lab in label_src:
             label_seq.extend(list(lab))
@@ -460,8 +460,8 @@ class MaskConverter(object):
             true_dist_trg = true_dist_trg.fill_(self.smoothing/4997)
             for lab in mask_label_trg:
                 true_dist_trg[lab] += (1.0 - self.smoothing) / len(mask_label_trg)
-            start_id.append(int(start[id][0]))
-            end_id.append(int(end[id][0]))
+            start_id.append(int(start[id[0]]))
+            end_id.append(int(end[id[0]]))
             seq_dist_src.append(true_dist_src)
             seq_dist_trg.append(true_dist_trg)
             select_label_src.append(mask_label_src[0])
@@ -471,7 +471,7 @@ class MaskConverter(object):
             #else:
             #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
             #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
-            feat[start[id][0]:end[id][0]] = fill_num
+            feat[start[id[0]]:end[id[0]]] = fill_num
         if len(seq_dist_src) == 0:
             dist_src = torch.zeros([self.odim], dtype=torch.float)
             dist_trg = torch.zeros([4997], dtype=torch.float)
@@ -669,7 +669,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskASRConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
 
     # read json data
     """
@@ -717,7 +717,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=0,
+        batch_size=1, num_workers=10,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(
