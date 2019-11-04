@@ -36,6 +36,7 @@ from espnet.asr.asr_utils import torch_snapshot
 from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
 from espnet.asr.pytorch_backend.asr_pre import MaskASRConverter
+from espnet.asr.pytorch_backend.asr_pre import MaskConverter
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
 from espnet.nets.asr_interface import ASRInterface
 from espnet.nets.pytorch_backend.e2e_asr import pad_list
@@ -118,7 +119,7 @@ class CustomEvaluator(BaseEvaluator):
                     # read scp files
                     # x: original json with loaded features
                     #    will be converted to chainer variable later
-                    self.model(*x)
+                    self.model.evaluate(*x)
 
                 summary.add(observation)
         self.model.train()
@@ -278,90 +279,6 @@ class CustomConverter(object):
         
         return xs_pad, ilens, ys_pad
 
-class MaskConverter(object):
-    """Custom batch converter for Pytorch.
-
-    Args:
-        subsampling_factor (int): The subsampling factor.
-        dtype (torch.dtype): Data type to convert.
-
-    """
-
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, mask_ratio=0.1):
-        """Construct a MaskConverter object."""
-        self.subsampling_factor = subsampling_factor
-        self.ignore_id = -1
-        self.dtype = dtype
-        self.mask_ratio = mask_ratio
-
-    def mask_feats(self, feat, params):
-        start, end, label = params
-        seq_len = label.shape[0]
-        mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
-        mask_id = np.argwhere(mask == 1)
-        label_mask = []
-        start_id = []
-        end_id = []
-        fill_num = feat.mean()
-        #chunk_len = []
-        for i in range(len(mask_id)):
-            id = mask_id[i]
-            feat[start[id][0]:end[id][0]] = fill_num
-        #label_mask.append(-1)
-        return feat
-
-    def __call__(self, batch, device=torch.device('cpu')):
-        """Transform a batch and send it to a device.
-
-        Args:
-            batch (list): The batch to transform.
-            device (torch.device): The device to send to.
-
-        Returns:
-            tuple(torch.Tensor, torch.Tensor, torch.Tensor)
-
-        """
-        # batch should be located in list
-        assert len(batch) == 1
-        xs, ys = batch[0]
-        ys = list(ys)
-        masked_xs = []
-        for i in range(len(xs)):
-            x = self.mask_feats(xs[i], ys[i])
-            masked_xs.append(x)
-        xs = masked_xs
-        
-        # perform subsampling
-        if self.subsampling_factor > 1:
-            xs = [x[::self.subsampling_factor, :] for x in xs]
-
-        # get batch of lengths of input sequences
-        ilens = np.array([x.shape[0] for x in xs])
-        ilens = torch.from_numpy(ilens).to(device)
-        xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-
-        ys_pad = pad_list([torch.from_numpy(y[2]) for y in ys], self.ignore_id).long().to(device)
-        
-        # NOTE: this is for multi-task learning (e.g., speech translation)
-        #ys_pad = torch.from_numpy(np.array(ys))
-        #mask = pad_list([torch.from_numpy(m).byte() for m in mask_mats], 0).to(device)
-        """
-        labels = ys_pad.clone()
-        token_mask = torch.bernoulli(torch.full(labels.shape, self.mask_ratio)).byte()
-        mask = token_mask & ~tag
-        index = (mask == 1).nonzero()
-        mask_start = []
-        mask_end = []
-        for idx in index:
-           batch_id = index[0][0]
-           token_id = index[0][1]
-           start_id = start[batch_id][token_id]
-           end_id = end[batch_id][token_id]
-           xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
-        pdb.set_trace()
-        """
-        return xs_pad, ilens, ys_pad
-
 
 def train(args):
     """Train with the given args.
@@ -485,7 +402,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskASRConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data

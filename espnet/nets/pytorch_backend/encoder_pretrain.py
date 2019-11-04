@@ -117,9 +117,9 @@ class E2E(ASRInterface, torch.nn.Module):
             src_attention_dropout_rate=args.transformer_attn_dropout_rate
         )
         self.predict = torch.nn.Linear(args.adim, odim, bias=False)
-        #self.trg_predict = torch.nn.Linear(args.adim, 4997)
-        self.linear_trans = torch.nn.Linear(odim, 4997)
-        self.predict.weight = self.decoder.embed[0].weight 
+        self.trg_predict = torch.nn.Linear(args.adim, 4997)
+        #self.linear_trans = torch.nn.Linear(odim, 4997)
+        #self.predict.weight = self.decoder.embed[0].weight 
         self.sos = odim - 1
         self.eos = odim - 1
         self.odim = odim
@@ -211,7 +211,7 @@ class E2E(ASRInterface, torch.nn.Module):
         #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
         #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
         pred = self.predict(cs_pad)
-        pred_trg = self.linear_trans(pred)
+        pred_trg = self.trg_predict(cs_pad)
         true_dist_src = true_dist_src.view(bs, -1, self.odim)
         true_dist_trg = true_dist_trg.view(bs, -1, 4997)
         true_dist_src = true_dist_src[:, :pred.shape[1]]
@@ -232,20 +232,45 @@ class E2E(ASRInterface, torch.nn.Module):
 
         # 3. compute attention loss
         loss_att = self.asr_criterion(pred_pad, ys_out_pad)
+        acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad, ignore_label=-1)
 
         # TODO(karita) show predicted text
         # TODO(karita) calculate these stats
         batch_size = xs_pad.size(0)
         hs_len = hs_mask.view(batch_size, -1).sum(1)
         loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
-        self.loss = loss_src + loss_trg + 0.7 * loss_att + 0.3 * loss_ctc
+        self.loss = loss_trg + 0.7 * loss_att + 0.3 * loss_ctc
 
         # copyied from e2e_asr
         loss_data = float(self.loss)
         loss_ctc_data = float(loss_ctc)
         loss_att_data = float(loss_att)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_ctc_data, loss_att_data, acc_trg, None, None, None, loss_data)
+            self.reporter.report(loss_ctc_data, loss_att_data, acc, acc_trg, None, None, loss_data)
+        else:
+            logging.warning('loss (=%f) is not correct', loss_data)
+        return self.loss
+
+    def evaluate(self, xs_pad, ilens, ys_pad):
+        xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
+        src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
+        hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
+        self.hs_pad = hs_pad    
+
+        ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
+        ys_mask = target_mask(ys_in_pad, self.ignore_id)
+        pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad, hs_mask)
+        loss_att = self.asr_criterion(pred_pad, ys_out_pad)
+        acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad, ignore_label=-1)
+        batch_size = xs_pad.size(0)
+        hs_len = hs_mask.view(batch_size, -1).sum(1)
+        loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad)
+        self.loss = 0.7 * loss_att + 0.3 * loss_ctc
+        loss_data = float(self.loss)
+        loss_ctc_data = float(loss_ctc)
+        loss_att_data = float(loss_att)
+        if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
+            self.reporter.report(loss_ctc_data, loss_att_data, acc, None, None, None, loss_data)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss
