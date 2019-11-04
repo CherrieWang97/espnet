@@ -274,6 +274,73 @@ class CustomConverter(object):
         
         return xs_pad, ilens, ys_pad
 
+class MaskFbankConverter(object):
+    """Custom batch converter for Pytorch.
+
+    Args:
+        subsampling_factor (int): The subsampling factor.
+        dtype (torch.dtype): Data type to convert.
+
+    """
+
+    def __init__(self, subsampling_factor=1, dtype=torch.float32, odim=5000, mask_ratio=0.15, smoothing=0.1):
+        """Construct a MaskConverter object."""
+        self.subsampling_factor = subsampling_factor
+        self.ignore_id = -1
+        self.dtype = dtype
+        self.mask_ratio = mask_ratio
+        self.odim = odim
+        self.smoothing = smoothing
+
+    def mask_feats(self, feat):
+        seq_len = feat.shape[0] // 4
+        mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
+        fill_num = feat.mean()
+        for id in mask_id:
+            feat[start[id[0]]:end[id[0]]] = fill_num
+        return feat, label_src
+
+    def __call__(self, batch, device=torch.device('cpu')):
+        """Transform a batch and send it to a device.
+
+        Args:
+            batch (list): The batch to transform.
+            device (torch.device): The device to send to.
+
+        Returns:
+            tuple(torch.Tensor, torch.Tensor, torch.Tensor)
+
+        """
+        # batch should be located in list
+        assert len(batch) == 1
+        xs, ys = batch[0]
+        ys = list(ys)
+        """
+        masked_xs = []
+        true_dist_src = []
+        for i in range(len(xs)):
+            x, y_asr = self.mask_feats(xs[i], ys[i])
+            masked_xs.append(x)
+            ys_asr.append(y_asr)
+        xs = masked_xs
+        """
+        xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
+        seq_len = ((xs_pad.shape[1] - 1) // 2 -1) // 2
+        n_batch = len(xs)
+        true_dist = xs_pad.clone()[:, :seq_len*4].view(n_batch, -1, 4, 83)
+        true_dist = torch.mean(true_dist, dim=2)
+        mask = torch.zeros(n_batch, seq_len).fill_(self.mask_ratio)
+        mask = torch.bernoulli(mask).byte().unsqueeze(2)
+        x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83)
+        
+        xs_pad[:, :x_mask.size(1)][x_mask] = xs_pad.mean()
+
+        # get batch of lengths of input sequences
+        ilens = np.array([x.shape[0] for x in xs])
+        ilens = torch.from_numpy(ilens).to(device)
+        ys_pad_asr = pad_list([torch.tensor(y) for y in ys], self.ignore_id).long().to(device)
+        return xs_pad, ilens, ys_pad_asr, true_dist, mask
+
 class MaskASRConverter(object):
     """Custom batch converter for Pytorch.
 
@@ -294,13 +361,16 @@ class MaskASRConverter(object):
 
     def mask_feats(self, feat, params):
         start, end, label_src = params
+        label_seq = []
+        for lab in label_src:
+            label_seq.extend(list(lab))
         seq_len = len(label_src)
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
         mask_id = np.argwhere(mask == 1)
         fill_num = feat.mean()
         for id in mask_id:
             feat[start[id[0]]:end[id[0]]] = fill_num
-        return feat, label_src
+        return feat, label_seq
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
