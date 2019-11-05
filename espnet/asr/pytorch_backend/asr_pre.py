@@ -295,9 +295,8 @@ class MaskFbankConverter(object):
     def mask_feats(self, feat):
         seq_len = feat.shape[0] // 4
         mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
-        fill_num = feat.mean()
         for id in mask_id:
-            feat[start[id[0]]:end[id[0]]] = fill_num
+            feat[start[id[0]]:end[id[0]]] = 0.0
         return feat, label_src
 
     def __call__(self, batch, device=torch.device('cpu')):
@@ -333,7 +332,7 @@ class MaskFbankConverter(object):
         mask = torch.bernoulli(mask).byte().unsqueeze(2)
         x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83)
         
-        xs_pad[:, :x_mask.size(1)][x_mask] = xs_pad.mean()
+        xs_pad[:, :x_mask.size(1)][x_mask] = 0.0
 
         # get batch of lengths of input sequences
         ilens = np.array([x.shape[0] for x in xs])

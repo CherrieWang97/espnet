@@ -37,6 +37,7 @@ from espnet.asr.asr_utils import torch_snapshot
 from espnet.asr.pytorch_backend.asr_init import load_trained_model
 from espnet.asr.pytorch_backend.asr_init import load_trained_modules
 from espnet.asr.pytorch_backend.asr_pre import MaskASRConverter
+from espnet.asr.pytorch_backend.asr_pre import MaskFbankConverter
 from espnet.asr.pytorch_backend.asr_pre import MaskConverter
 import espnet.lm.pytorch_backend.extlm as extlm_pytorch
 from espnet.nets.asr_interface import ASRInterface
@@ -320,6 +321,15 @@ def train(args):
         model_class = dynamic_import(args.model_module)
         model = model_class(idim, odim, args)
     assert isinstance(model, ASRInterface)
+    if args.pretrain_model is not None:
+        params = dict(model.named_parameters())
+        load_model = torch.load(args.pretrain_model)['state_dict']
+        for k, v in load_model.items():
+            name = k.replace('module.', '')
+            name = name.replace('encoders', 'enc1')
+            if name in params and params[name].size() == load_model[k].size():
+                params[name].data = load_model[k].data
+                logging.warning('load param %s from pretrained model' % name)
 
     subsampling_factor = model.subsample[0]
 
@@ -403,7 +413,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim)
+    converter = MaskFbankConverter(subsampling_factor=subsampling_factor, dtype=dtype)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
