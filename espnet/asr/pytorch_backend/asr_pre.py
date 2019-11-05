@@ -329,13 +329,15 @@ class MaskFbankConverter(object):
         true_dist = xs_pad.clone()[:, :seq_len*4].view(n_batch, -1, 4, 83)
         true_dist = torch.mean(true_dist, dim=2)
         mask = torch.zeros(n_batch, seq_len).fill_(self.mask_ratio)
-        mask = torch.bernoulli(mask).byte().unsqueeze(2)
-        x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83)
+        mask = torch.bernoulli(mask).unsqueeze(2)
+        x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83).byte()
+        zero_mask = torch.bernoulli(torch.full(x_mask.shape, 0.8)).byte() & x_mask
         
-        xs_pad[:, :x_mask.size(1)][x_mask] = 0.0
+        xs_pad[:, :x_mask.size(1)][zero_mask] = 0.0
 
         # get batch of lengths of input sequences
         ilens = np.array([x.shape[0] for x in xs])
+        mask[mask==0] = 0.5
         ilens = torch.from_numpy(ilens).to(device)
         ys_pad_asr = pad_list([torch.tensor(y) for y in ys], self.ignore_id).long().to(device)
         return xs_pad, ilens, ys_pad_asr, true_dist, mask
@@ -668,7 +670,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
+    converter = MaskFbankConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
 
     # read json data
     """

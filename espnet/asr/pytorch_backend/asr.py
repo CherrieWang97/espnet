@@ -413,7 +413,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskFbankConverter(subsampling_factor=subsampling_factor, dtype=dtype)
+    converter = MaskFbankConverter(subsampling_factor=subsampling_factor, dtype=dtype, mask_ratio=args.mask_ratio)
     valid_converter = CustomConverter(subsampling_factor=subsampling_factor, dtype=dtype)
 
     # read json data
