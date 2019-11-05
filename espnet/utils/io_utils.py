@@ -186,6 +186,8 @@ class LoadInputsAndTargets(object):
                     if 'tokenid2' in inp:
                         x2 = list(map(np.array, inp['tokenid2']))
                         y_feats_dict.setdefault("trgid", []).append(x2)
+                    else:
+                        y_feats_dict.setdefault("trgid", []).append([])
                     #y_feats_dict.setdefault("trgid", []).append(x2)
                    
 
@@ -308,8 +310,8 @@ class LoadInputsAndTargets(object):
 
                 # get index of non-zero length samples
                 nonzero_idx = list(filter(lambda i: len(ys[0][i]) > 0, range(len(ys[0]))))
-                for n in range(1, len(y_feats_dict)):
-                    nonzero_idx = filter(lambda i: len(ys[n][i]) > 0, nonzero_idx)
+                #for n in range(1, len(y_feats_dict)):
+                #    nonzero_idx = filter(lambda i: len(ys[n][i]) > 0, nonzero_idx)
         else:
             # Note(kamo): Be careful not to make nonzero_idx to a generator
             nonzero_idx = list(range(len(xs)))

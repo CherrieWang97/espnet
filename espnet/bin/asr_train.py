@@ -178,6 +178,7 @@ def get_parser(parser=None, required=True):
                         help='Replace <sos> in the decoder with a target language ID \
                               (the first token in the target sequence)')
     # finetuning related
+    parser.add_argument('--pretrain-model', default=None, type=str)
     parser.add_argument('--enc-init', default=None, type=str,
                         help='Pre-trained ASR model to initialize encoder.')
     parser.add_argument('--enc-init-mods', default='enc.enc.',

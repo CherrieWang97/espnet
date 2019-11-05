@@ -447,32 +447,38 @@ class MaskConverter(object):
         select_label_src = []
         select_label_trg = []
         fill_num = feat.mean()
-        #chunk_len = []
+        mask = []
         for i in range(len(mask_id)):
             id = mask_id[i]
+            start_id.append(int(start[id[0]]))
+            end_id.append(int(end[id[0]]))
+            feat[start[id[0]]:end[id[0]]] = fill_num
+
             mask_label_src = label_src[id[0]]
-            mask_label_trg = label_trg[id[0]]
-            if len(mask_label_trg) == 0:
-                continue
             true_dist_src = torch.zeros([self.odim], dtype=torch.float)
             true_dist_src = true_dist_src.fill_(self.smoothing/(self.odim-len(mask_label_src)))
             true_dist_src[mask_label_src] = (1.0 - self.smoothing)/len(mask_label_src)
-            true_dist_trg = torch.zeros([4997], dtype=torch.float)
-            true_dist_trg = true_dist_trg.fill_(self.smoothing/4997)
-            for lab in mask_label_trg:
-                true_dist_trg[lab] += (1.0 - self.smoothing) / len(mask_label_trg)
-            start_id.append(int(start[id[0]]))
-            end_id.append(int(end[id[0]]))
             seq_dist_src.append(true_dist_src)
-            seq_dist_trg.append(true_dist_trg)
             select_label_src.append(mask_label_src[0])
-            select_label_trg.append(mask_label_trg[0])
-            #if i == 0:
-            #    chunk_len.append(start[id][0] // 4)
-            #else:
-            #    chunk_len.append(start[id][0] // 4 - end[mask_id[i-1]][0] // 4)
-            #chunk_len.append(end[id][0] // 4 - start[id][0] // 4)
-            feat[start[id[0]]:end[id[0]]] = fill_num
+            if len(label_trg) != 0:
+                mask_label_trg = label_trg[id[0]]
+                true_dist_trg = torch.zeros([4997], dtype=torch.float)
+                if len(mask_label_trg) == 0:
+                    mask.append(0)
+                    seq_dist_trg.append(true_dist_trg)
+                    select_label_trg.append(-1) 
+                    continue
+                mask.append(1)
+                true_dist_trg = true_dist_trg.fill_(self.smoothing/4997)
+                for lab in mask_label_trg:
+                    true_dist_trg[lab] += (1.0 - self.smoothing) / len(mask_label_trg)
+                seq_dist_trg.append(true_dist_trg)
+                select_label_trg.append(mask_label_trg[0])
+            else:
+                mask.append(0)
+                true_dist_trg = torch.zeros([4997], dtype=torch.float)
+                seq_dist_trg.append(true_dist_trg)
+                select_label_trg.append(-1)
         if len(seq_dist_src) == 0:
             dist_src = torch.zeros([self.odim], dtype=torch.float)
             dist_trg = torch.zeros([4997], dtype=torch.float)
@@ -480,7 +486,7 @@ class MaskConverter(object):
             dist_src = torch.cat(seq_dist_src)
             dist_trg = torch.cat(seq_dist_trg)
         #label_mask.append(-1)
-        return feat, dist_src, dist_trg, select_label_src, select_label_trg, start_id, end_id, label_seq
+        return feat, dist_src, dist_trg, select_label_src, select_label_trg, start_id, end_id, label_seq, mask
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -504,10 +510,10 @@ class MaskConverter(object):
         ends = []
         masked_ys_src = []
         masked_ys_trg = []
-        #chunk_lens = []
+        mask_weight = []
         ys_asr = []
         for i in range(len(xs)):
-            x, y_src, y_trg, select_label_src, select_label_trg, start, end, y_asr = self.mask_feats(xs[i], ys[i])
+            x, y_src, y_trg, select_label_src, select_label_trg, start, end, y_asr, mask = self.mask_feats(xs[i], ys[i])
             ys_asr.append(y_asr)
             masked_xs.append(x)
             masked_ys_src.append(select_label_src)
@@ -516,11 +522,7 @@ class MaskConverter(object):
             true_dist_trg.append(y_trg)
             starts.append(start)
             ends.append(end)
-            #chunk_lens.append(chunk_len)
-            #mask = np.array([0] * len(x))
-            #mask[start:end] = 1
-            #mask_mats.append(mask)
-            #mask_ids.append(mask_id)
+            mask_weight.append(mask)
         xs = masked_xs
         # perform subsampling
         if self.subsampling_factor > 1:
@@ -535,6 +537,7 @@ class MaskConverter(object):
         masked_pad_trg = pad_list([torch.tensor(y) for y in masked_ys_trg], self.ignore_id).long().to(device)
         true_dist_src = pad_list(true_dist_src, 0.0).to(device)
         true_dist_trg = pad_list(true_dist_trg, 0.0).to(device)
+        mask_weight = pad_list([torch.tensor(m) for m in mask_weight], 0.0).to(device)
         
         # NOTE: this is for multi-task learning (e.g., speech translation)
         #ys_pad = torch.from_numpy(np.array(ys))
@@ -554,7 +557,7 @@ class MaskConverter(object):
            xs_pad[batch_id, start_id: end_id].fill_(xs_pad[batch_id].mean())
         pdb.set_trace()
         """
-        return xs_pad, ilens, masked_pad_src, masked_pad_trg,  true_dist_src, true_dist_trg, starts, ends, ys_pad_asr
+        return xs_pad, ilens, masked_pad_src, masked_pad_trg,  true_dist_src, true_dist_trg, starts, ends, ys_pad_asr, mask_weight
 
 
 def train(args):

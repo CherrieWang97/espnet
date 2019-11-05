@@ -22,7 +22,7 @@ from espnet.nets.pytorch_backend.nets_utils import th_accuracy
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttention
 from espnet.nets.pytorch_backend.transformer.decoder import Decoder
-from espnet.nets.pytorch_backend.transformer.encoder import Encoder
+from espnet.nets.pytorch_backend.transformer.mpc_encoder import Encoder
 from espnet.nets.pytorch_backend.transformer.initializer import initialize
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import LabelSmoothingLoss
 from espnet.nets.pytorch_backend.transformer.mask import subsequent_mask
@@ -154,7 +154,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad_src,true_dist_src, starts, ends, ys_pad_asr=None):
+    def forward(self, xs_pad, ilens, ys_pad_src, ys_pad_trg, true_dist_src, true_dist_trg, starts, ends, ys_pad_asr, mask):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -170,30 +170,39 @@ class E2E(ASRInterface, torch.nn.Module):
         # 1. forward encoder
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-        hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
-        self.hs_pad = hs_pad
-        seq_len = hs_pad.shape[1]
-        bs = hs_pad.shape[0]
-        gpu_id = hs_pad.device.index
+        hs_pad_1, hs_pad_2, hs_mask = self.encoder(xs_pad, src_mask)
+        seq_len = hs_pad_1.shape[1]
+        bs = hs_pad_1.shape[0]
+        gpu_id = hs_pad_1.device.index
         loss = None
-        hs_split_list = []
+        hs_src_list = []
+        hs_trg_list = []
         for i in range(bs):
             chunks = []
+            chunks_2 = []
             for j in range(len(starts[bs*gpu_id + i])):
                 start = starts[bs*gpu_id + i][j] // 4
                 end = ends[bs*gpu_id + i][j] // 4
-                if start >= hs_pad.size(1):
-                    hs = hs_pad[i, -1, :].unsqueeze(0)
+                if start >= hs_pad_1.size(1):
+                    hs = hs_pad_1[i, -1, :].unsqueeze(0)
+                    hs_2 = hs_pad_2[i, -1, :].unsqueeze(0)
                 elif start >= end:
-                    hs = hs_pad[i, start, :].unsqueeze(0)
+                    hs = hs_pad_1[i, start, :].unsqueeze(0)
+                    hs_2 = hs_pad_2[i, start, :].unsqueeze(0)
                 else:
-                    hs = hs_pad[i, start:end, :]
+                    hs = hs_pad_1[i, start:end, :]
+                    hs_2 = hs_pad_2[i, start:end, :]
                 chunks.append(torch.mean(hs, dim=0))
+                chunks_2.append(torch.mean(hs_2, dim=0))
             if len(chunks) == 0:
-                hs_split_list.append(torch.zeros([1, self.adim]).float().to(xs_pad.device))
+                hs_src_list.append(torch.zeros([1, self.adim]).float().to(xs_pad.device))
+                hs_trg_list.append(torch.zeros([1, self.adim]).float().to(xs_pad.device))
             else:
-                hs_split_list.append(torch.cat(chunks, dim=0).view(-1, self.adim))
-        cs_pad = pad_list(hs_split_list, 0).to(xs_pad.device)
+                hs_src_list.append(torch.cat(chunks, dim=0).view(-1, self.adim))
+                hs_trg_list.append(torch.cat(chunks_2, dim=0).view(-1, self.adim))
+        
+        cs_pad = pad_list(hs_src_list, 0).to(xs_pad.device)
+        cs_pad_2 = pad_list(hs_trg_list, 0).to(xs_pad.device)
         """ 
             hs_split = torch.split(hs_pad[i], chunk_split[i])
             splits = []
@@ -211,88 +220,61 @@ class E2E(ASRInterface, torch.nn.Module):
         #hs_pad = hs_pad.masked_fill(~mask.unsqueeze(-1), 0.0)
         #hs_pad = hs_pad.sum(1) / mask.sum(1).float().unsqueeze(-1)
         pred = self.predict(cs_pad)
-<<<<<<< HEAD
-        pred_trg = self.trg_predict(cs_pad)
-=======
+        pred_trg = self.trg_predict(cs_pad_2)
         #pred_trg = self.linear_trans(pred)
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
         true_dist_src = true_dist_src.view(bs, -1, self.odim)
-        #true_dist_trg = true_dist_trg.view(bs, -1, 4997)
+        true_dist_trg = true_dist_trg.view(bs, -1, 4997)
         true_dist_src = true_dist_src[:, :pred.shape[1]]
-        #true_dist_trg = true_dist_trg[:, :pred.shape[1]]
+        true_dist_trg = true_dist_trg[:, :pred.shape[1]]
         ys_pad_src = ys_pad_src[:, :pred.shape[1]]
-        #ys_pad_trg = ys_pad_trg[:, :pred.shape[1]]
+        ys_pad_trg = ys_pad_trg[:, :pred.shape[1]]
+        mask = mask[:, :pred.shape[1]]
         loss_src = self.criterion(torch.log_softmax(pred, dim=-1), true_dist_src)
         loss_src = loss_src.sum() / bs
-        #loss_trg = self.criterion(torch.log_softmax(pred_trg, dim=-1), true_dist_trg)
-        #loss_trg = loss_trg.sum() / bs
+        loss_trg = self.criterion(torch.log_softmax(pred_trg, dim=-1), true_dist_trg)
+        loss_trg = loss_trg * mask.unsqueeze(-1).float()
+        loss_trg = loss_trg.sum() / bs
         acc_src = th_accuracy(pred.view(-1, self.odim), ys_pad_src, ignore_label=-1)
-        #acc_trg = th_accuracy(pred_trg.view(-1, 4997), ys_pad_trg, ignore_label=-1)
+        acc_trg = th_accuracy(pred_trg.view(-1, 4997), ys_pad_trg, ignore_label=-1)
         
         # 2. forward decoder
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad_asr, self.sos, self.eos, self.ignore_id)
         ys_mask = target_mask(ys_in_pad, self.ignore_id)
-        pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad, hs_mask)
+        pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad_2, hs_mask)
 
         # 3. compute attention loss
         loss_att = self.asr_criterion(pred_pad, ys_out_pad)
         acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad, ignore_label=-1)
-<<<<<<< HEAD
-
-=======
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
         # TODO(karita) show predicted text
         # TODO(karita) calculate these stats
         batch_size = xs_pad.size(0)
         hs_len = hs_mask.view(batch_size, -1).sum(1)
-        loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
-<<<<<<< HEAD
-        self.loss = loss_trg + 0.7 * loss_att + 0.3 * loss_ctc
-=======
-        self.loss = loss_src + 0.7 * loss_att + 0.3 * loss_ctc
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
+        loss_ctc = self.ctc(hs_pad_2.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
+        self.loss = loss_trg + loss_src + 0.7 * loss_att + 0.3 * loss_ctc
 
         # copyied from e2e_asr
         loss_data = float(self.loss)
         loss_ctc_data = float(loss_ctc)
         loss_att_data = float(loss_att)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-<<<<<<< HEAD
             self.reporter.report(loss_ctc_data, loss_att_data, acc, acc_trg, None, None, loss_data)
-=======
-            self.reporter.report(loss_ctc_data, loss_att_data, acc, acc_src, None, None, loss_data)
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss
 
-<<<<<<< HEAD
-    def evaluate(self, xs_pad, ilens, ys_pad):
-        xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
-        src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-        hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
-        self.hs_pad = hs_pad    
-
-        ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
-=======
     def evaluate(self, xs_pad, ilens, ys_pad_asr):
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-        hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
+        _, hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
         self.hs_pad = hs_pad
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad_asr, self.sos, self.eos, self.ignore_id)
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
         ys_mask = target_mask(ys_in_pad, self.ignore_id)
         pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad, hs_mask)
         loss_att = self.asr_criterion(pred_pad, ys_out_pad)
         acc = th_accuracy(pred_pad.view(-1, self.odim), ys_out_pad, ignore_label=-1)
         batch_size = xs_pad.size(0)
         hs_len = hs_mask.view(batch_size, -1).sum(1)
-<<<<<<< HEAD
-        loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad)
-=======
         loss_ctc = self.ctc(hs_pad.view(batch_size, -1, self.adim), hs_len, ys_pad_asr)
->>>>>>> b757d7cf6b6dce8aae4716594cb8e4a52a6b5e49
         self.loss = 0.7 * loss_att + 0.3 * loss_ctc
         loss_data = float(self.loss)
         loss_ctc_data = float(loss_ctc)
