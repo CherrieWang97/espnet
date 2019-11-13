@@ -8,6 +8,7 @@ from distutils.util import strtobool
 
 import logging
 import math
+import pdb
 
 import torch
 
@@ -20,7 +21,7 @@ from espnet.nets.pytorch_backend.nets_utils import th_accuracy
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.attention import MultiHeadedAttention
 from espnet.nets.pytorch_backend.transformer.decoder import Decoder
-from espnet.nets.pytorch_backend.transformer.mpc_encoder import Encoder
+from espnet.nets.pytorch_backend.transformer.encoder import Encoder
 from espnet.nets.pytorch_backend.transformer.initializer import initialize
 from espnet.nets.pytorch_backend.transformer.label_smoothing_loss import LabelSmoothingLoss
 from espnet.nets.pytorch_backend.transformer.mask import subsequent_mask
@@ -103,8 +104,8 @@ class E2E(ASRInterface, torch.nn.Module):
             positional_dropout_rate=args.dropout_rate,
             attention_dropout_rate=args.transformer_attn_dropout_rate
         )
-        self.fbank_pred = torch.nn.Linear(args.adim, idim)
-        self.fbank_loss = torch.nn.L1Loss(reduction='none')
+        self.fbank_pred = torch.nn.Linear(args.adim, 2)
+        self.fbank_loss = torch.nn.CrossEntropyLoss(reduction='none', ignore_index=-1)
         self.decoder = Decoder(
             odim=odim,
             attention_dim=args.adim,
@@ -151,7 +152,7 @@ class E2E(ASRInterface, torch.nn.Module):
         # initialize parameters
         initialize(self, args.transformer_init)
 
-    def forward(self, xs_pad, ilens, ys_pad, true_dist, mask, ys_pad_asr=None):
+    def forward(self, xs_pad, ilens, ys_pad, mask, ys_pad_asr=None):
         """E2E forward.
 
         :param torch.Tensor xs_pad: batch of padded source sequences (B, Tmax, idim)
@@ -166,17 +167,23 @@ class E2E(ASRInterface, torch.nn.Module):
         """
         # 1. forward encoder
         xs_pad = xs_pad[:, :max(ilens)]  # for data parallel
-        mlens = ((max(ilens) - 1) // 2 - 1) // 2
-        true_dist = true_dist[:, :mlens]
-        mask = mask[:, :mlens]
+        #true_dist = true_dist[:, :max(ilens)]
+        mask = mask[:, :max(ilens)]
+        #mlens = ((max(ilens) - 1) // 2 - 1) // 2
+        #true_dist = true_dist[:, :mlens]
+        #mask = mask[:, :mlens]
         src_mask = (~make_pad_mask(ilens.tolist())).to(xs_pad.device).unsqueeze(-2)
-        hs_pad_1, hs_pad_2, hs_mask = self.encoder(xs_pad, src_mask)
-        hs_pred = self.fbank_pred(hs_pad_1)
+        hs_pad, hs_mask = self.encoder(xs_pad, src_mask)
+        hs_pred = self.fbank_pred(hs_pad)
         #hs_pred = hs_pred * mask
-        loss_l1 = self.fbank_loss(hs_pred, true_dist)
-        loss_l1 = (loss_l1 * mask.float()).sum() / xs_pad.size(0)
+        loss = self.fbank_loss(hs_pred.contiguous().view(-1, 2), mask.contiguous().view(-1))
+        loss = loss.sum() / xs_pad.size(0)
+        acc = th_accuracy(hs_pred.contiguous().view(-1, 2), mask, ignore_label=-1)
+        #loss_l1 = self.fbank_loss(hs_pred, true_dist)
+        #loss_l1 = (loss_l1 * mask.float()).sum() / xs_pad.size(0)
 
         # 2. forward decoder
+        """
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
         ys_mask = target_mask(ys_in_pad, self.ignore_id)
         pred_pad, pred_mask = self.decoder(ys_in_pad, ys_mask, hs_pad_2, hs_mask)
@@ -222,11 +229,11 @@ class E2E(ASRInterface, torch.nn.Module):
             self.loss = alpha * loss_ctc + (1 - alpha) * loss_att
             loss_att_data = float(loss_att)
             loss_ctc_data = float(loss_ctc)
-
-        self.loss = self.loss + loss_l1
+        """
+        self.loss = loss
         loss_data = float(self.loss)
         if loss_data < CTC_LOSS_THRESHOLD and not math.isnan(loss_data):
-            self.reporter.report(loss_ctc_data, loss_att_data, acc, cer_ctc, cer, wer, loss_data)
+            self.reporter.report(None, None, None, acc, None, None, loss_data)
         else:
             logging.warning('loss (=%f) is not correct', loss_data)
         return self.loss

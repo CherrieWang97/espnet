@@ -283,7 +283,7 @@ class MaskFbankConverter(object):
 
     """
 
-    def __init__(self, subsampling_factor=1, dtype=torch.float32, odim=5000, mask_ratio=0.15, smoothing=0.1):
+    def __init__(self, subsampling_factor=4, dtype=torch.float32, odim=5000, mask_ratio=0.15, smoothing=0.1):
         """Construct a MaskConverter object."""
         self.subsampling_factor = subsampling_factor
         self.ignore_id = -1
@@ -293,11 +293,17 @@ class MaskFbankConverter(object):
         self.smoothing = smoothing
 
     def mask_feats(self, feat):
-        seq_len = feat.shape[0] // 4
-        mask = np.random.binomial(1, self.mask_ratio, size=seq_len)
-        for id in mask_id:
-            feat[start[id[0]]:end[id[0]]] = 0.0
-        return feat, label_src
+        feat = torch.from_numpy(feat).float()
+        seq_len = feat.size(0)
+        mask = torch.zeros(seq_len).fill_(self.mask_ratio)
+        mask = torch.bernoulli(mask).byte()
+        perm = torch.randperm(seq_len)
+        feat_perm = feat[perm]
+        feat[mask] = 0.0
+        feat_perm[~mask] = 0.0
+        new_feat = feat + feat_perm
+        
+        return new_feat, mask.long()
 
     def __call__(self, batch, device=torch.device('cpu')):
         """Transform a batch and send it to a device.
@@ -314,6 +320,7 @@ class MaskFbankConverter(object):
         assert len(batch) == 1
         xs, ys = batch[0]
         ys = list(ys)
+        xs = [x[::self.subsampling_factor, :] for x in xs]
         """
         masked_xs = []
         true_dist_src = []
@@ -323,24 +330,32 @@ class MaskFbankConverter(object):
             ys_asr.append(y_asr)
         xs = masked_xs
         """
-        xs_pad = pad_list([torch.from_numpy(x).float() for x in xs], 0).to(device, dtype=self.dtype)
-        seq_len = ((xs_pad.shape[1] - 1) // 2 -1) // 2
+        xs_pad_list = []
+        mask_list = []
+        for x in xs:
+            new_x, mask = self.mask_feats(x)
+            xs_pad_list.append(new_x)
+            mask_list.append(mask)
+        xs_pad = pad_list(xs_pad_list, 0).to(device, dtype=self.dtype)
+        mask = pad_list(mask_list, -1)
+        """
+        seq_len = xs_pad.shape[1]
         n_batch = len(xs)
-        true_dist = xs_pad.clone()[:, :seq_len*4].view(n_batch, -1, 4, 83)
-        true_dist = torch.mean(true_dist, dim=2)
+        true_dist = xs_pad.clone()
         mask = torch.zeros(n_batch, seq_len).fill_(self.mask_ratio)
-        mask = torch.bernoulli(mask).unsqueeze(2)
-        x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83).byte()
-        zero_mask = torch.bernoulli(torch.full(x_mask.shape, 0.8)).byte() & x_mask
-        
-        xs_pad[:, :x_mask.size(1)][zero_mask] = 0.0
-
+        mask = torch.bernoulli(mask).unsqueeze(2).byte()
+        #x_mask = mask.expand(n_batch, seq_len, 4 * 83).contiguous().view(n_batch, seq_len * 4, 83).byte()
+        zero_mask = torch.bernoulli(torch.full(mask.shape, 0.8)).byte() & mask
+        zero_mask = zero_mask.expand_as(xs_pad)
+        xs_pad[zero_mask] = 0.0
+        """
         # get batch of lengths of input sequences
         ilens = np.array([x.shape[0] for x in xs])
-        mask[mask==0] = 0.5
+        #mask[mask==0] = 0.5
         ilens = torch.from_numpy(ilens).to(device)
-        ys_pad_asr = pad_list([torch.tensor(y) for y in ys], self.ignore_id).long().to(device)
-        return xs_pad, ilens, ys_pad_asr, true_dist, mask
+        
+        ys_pad_asr = pad_list([torch.tensor(y[0]) for y in ys], self.ignore_id).long().to(device)
+        return xs_pad, ilens, ys_pad_asr, mask
 
 class MaskASRConverter(object):
     """Custom batch converter for Pytorch.
@@ -673,7 +688,7 @@ def train(args):
     setattr(optimizer, "serialize", lambda s: reporter.serialize(s))
 
     # Setup a converter
-    converter = MaskFbankConverter(subsampling_factor=subsampling_factor, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
+    converter = MaskFbankConverter(subsampling_factor=4, dtype=dtype, odim=odim, mask_ratio=args.mask_ratio)
 
     # read json data
     """
@@ -721,7 +736,7 @@ def train(args):
     #traindata = [load_tr(data) for data in train]
     train_iter = {'main': ChainerDataLoader(
         dataset=TransformDataset(train, lambda data: converter([load_tr(data)])),
-        batch_size=1, num_workers=10,
+        batch_size=1, num_workers=0,
         shuffle=not use_sortagrad, collate_fn=lambda x: x[0])}
     """
     valid_iter = {'main': ChainerDataLoader(
